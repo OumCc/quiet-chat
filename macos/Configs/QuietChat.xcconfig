@@ -1,0 +1,11 @@
+// QuietChat 应用目标的共享构建设置。
+// 签名默认使用本机临时签名（Sign to Run Locally），任何人拉下代码都能直接编译运行。
+// 临时签名每次编译都会变，系统会因此让「辅助功能」授权失效；
+// 想固定签名身份时，把 Local.xcconfig.example 复制为 Local.xcconfig 并填写（该文件不提交）。
+
+PRODUCT_BUNDLE_IDENTIFIER = io.github.wuqinfa.QuietChat
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

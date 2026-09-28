@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuietChat 配置",
+  "description": "macOS 与 Windows 共用的配置格式。写入时输出全部字段；读取时缺失字段取 default，未知字段忽略。长度单位为逻辑像素（macOS 为 pt，Windows 为 DIP），位置相对微信主窗口外框的左上角。",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "description": "配置格式版本，只在不兼容变化时递增。",
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "listColumn": {
+      "description": "聊天列表栏在微信主窗口内的位置，由用户校准得到。列表栏总是向下延伸到窗口底边。",
+      "type": "object",
+      "properties": {
+        "leftInset": {
+          "description": "列表栏左边缘到窗口左边缘的距离。",
+          "type": "number",
+          "minimum": 0,
+          "default": 64
+        },
+        "topInset": {
+          "description": "列表栏上边缘到窗口上边缘的距离。",
+          "type": "number",
+          "minimum": 0,
+          "default": 0
+        },
+        "width": {
+          "description": "列表栏宽度。",
+          "type": "number",
+          "minimum": 0,
+          "default": 280
+        }
+      }
+    }
+  }
+}

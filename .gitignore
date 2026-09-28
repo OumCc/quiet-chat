@@ -1,0 +1,17 @@
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+macos/build/
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# 本机签名配置（见 macos/Configs/Local.xcconfig.example）
+macos/Configs/Local.xcconfig
+
+# 验证脚本生成的标注图
+*.probe.png

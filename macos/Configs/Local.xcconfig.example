@@ -1,0 +1,13 @@
+// 本机签名配置示例：复制为同目录下的 Local.xcconfig（已被 .gitignore 忽略）后，取消注释其中一种方式。
+// 作用：使用固定的签名身份，重新编译后「辅助功能」授权依然有效。
+
+// 方式一：在 Xcode「设置 → 账户」登录 Apple ID 后使用免费的开发证书（Personal Team）
+// CODE_SIGN_STYLE = Automatic
+// CODE_SIGN_IDENTITY = Apple Development
+// DEVELOPMENT_TEAM = 你的 Team ID
+
+// 方式二：使用在「钥匙串访问」中自建的代码签名证书
+// CODE_SIGN_IDENTITY = QuietChat Dev
+
+// fork 后自行分发时，建议换成自己的包标识
+// PRODUCT_BUNDLE_IDENTIFIER = com.example.QuietChat
