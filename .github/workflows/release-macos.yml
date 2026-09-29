@@ -1,0 +1,79 @@
+# 构建 macOS 安装包：推送 v* tag 时构建通用二进制（arm64 + x86_64），打成 DMG 并发布到 GitHub Release；
+# 手动触发时只构建，DMG 作为 workflow artifact 下载。
+# 使用临时签名（ad-hoc），不需要任何 Secrets；用户首次打开需在「隐私与安全性」里放行，见 README。
+name: Release macOS
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # 工程格式需要 Xcode 26
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 确定版本号
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          xcodebuild -version
+
+      - name: 单元测试
+        run: swift test --package-path macos/QuietChatCore
+
+      - name: 构建
+        # generic 目标下 Release 默认同时编译 arm64 和 x86_64；
+        # 显式指定临时签名，避免依赖 Local.xcconfig
+        run: |
+          xcodebuild \
+            -project macos/QuietChat.xcodeproj \
+            -scheme QuietChat \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            build
+          APP=build/Build/Products/Release/QuietChat.app
+          lipo -archs "$APP/Contents/MacOS/QuietChat"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: 打包 DMG
+        run: |
+          DMG="QuietChat-${{ steps.version.outputs.version }}.dmg"
+          mkdir dmg
+          cp -R build/Build/Products/Release/QuietChat.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "QuietChat" -srcfolder dmg -format UDZO -ov "$DMG"
+          shasum -a 256 "$DMG" | tee "$DMG.sha256"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QuietChat-${{ steps.version.outputs.version }}
+          path: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" \
+            --title "QuietChat $GITHUB_REF_NAME" \
+            --generate-notes

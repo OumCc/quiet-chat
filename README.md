@@ -34,20 +34,37 @@ QuietChat 是一个 macOS 菜单栏小工具。打开微信电脑版时，它用
 - 微信电脑版 4.x（在 4.1 上验证）
 - 从源码构建需要 Xcode 26 及以上
 
-目前只支持 macOS，暂不提供编译好的安装包，需要从源码构建。
+目前只支持 macOS，同时支持 Apple 芯片和 Intel 芯片。
+
+## 下载安装
+
+1. 到 [Releases](https://github.com/OumCc/quiet-chat/releases/latest) 下载 `QuietChat-x.y.z.dmg`，打开后把 QuietChat 拖进「应用程序」。
+2. 安装包没有经过 Apple 公证，第一次打开时系统会拦住它，提示无法验证是否包含恶意软件。先关掉提示，到「系统设置 → 隐私与安全性」，在页面底部找到 QuietChat，点「仍要打开」并确认。
+   也可以在终端里移除隔离标记，然后正常打开：
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/QuietChat.app
+   ```
+3. 继续[首次使用](#首次使用)的步骤。
+
+**升级后授权失效**：安装包使用临时签名，每个版本的签名都不同，系统会把新版本当成新应用。升级后到「系统设置 → 隐私与安全性 → 辅助功能」，用「−」删掉旧的 QuietChat，重新打开后再授权一次。你的密码和校准结果不受影响。
+
+## 首次使用
+
+1. 首次运行会弹出辅助功能授权提示。到「系统设置 → 隐私与安全性 → 辅助功能」里打开 QuietChat。
+2. 在遮罩的密码框里输入默认密码 `1234567890` 解锁，然后点菜单栏的 QuietChat 图标，选「校准遮罩位置…」，拖动蓝框的左、右、上三条边，对齐微信的聊天列表。
+
+建议解锁后尽快在菜单里「修改密码…」。忘了密码时，选菜单里的「恢复默认密码…」即可，锁定状态下也能用。
 
 ## 从源码构建运行
 
-1. 用 Xcode 打开 `macos/QuietChat.xcodeproj`，选择 `QuietChat` scheme，按 ⌘R 运行。
-   也可以用命令行：
-   ```bash
-   xcodebuild -project macos/QuietChat.xcodeproj -scheme QuietChat -configuration Debug -derivedDataPath macos/build build
-   open macos/build/Build/Products/Debug/QuietChat.app
-   ```
-2. 首次运行会弹出辅助功能授权提示。到「系统设置 → 隐私与安全性 → 辅助功能」里打开 QuietChat。
-3. 在遮罩的密码框里输入默认密码 `1234567890` 解锁，然后点菜单栏的 QuietChat 图标，选「校准遮罩位置…」，拖动蓝框的左、右、上三条边，对齐微信的聊天列表。
+用 Xcode 打开 `macos/QuietChat.xcodeproj`，选择 `QuietChat` scheme，按 ⌘R 运行。也可以用命令行：
 
-建议解锁后尽快在菜单里「修改密码…」。忘了密码时，选菜单里的「恢复默认密码…」即可，锁定状态下也能用。
+```bash
+xcodebuild -project macos/QuietChat.xcodeproj -scheme QuietChat -configuration Debug -derivedDataPath macos/build build
+open macos/build/Build/Products/Debug/QuietChat.app
+```
+
+然后按[首次使用](#首次使用)的步骤授权和校准。
 
 ### 重新编译后授权失效？
 
