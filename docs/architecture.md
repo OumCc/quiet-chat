@@ -30,15 +30,15 @@
 ```
 quiet-chat/
 ├─ docs/                     架构说明（本文）与 ADR
-├─ shared/                   两端共用：配置 schema，以后加上识别用的截图样本
+├─ shared/                   两端共用：配置 schema、brand/ 下的 logo 源文件，以后加上识别用的截图样本
 ├─ macos/
 │  ├─ QuietChat.xcodeproj    应用工程（源码目录自动同步，新增文件无需改工程）
 │  ├─ Configs/               构建设置；Local.xcconfig 为本机签名配置，不提交
-│  ├─ QuietChat/             应用外壳：App/  WindowTracking/  Masking/
+│  ├─ QuietChat/             应用外壳：App/  WindowTracking/  Masking/  Assets.xcassets（应用图标、菜单栏图标）
 │  └─ QuietChatCore/         纯逻辑 Swift 包，`swift test` 直接运行
 ├─ windows/                  （规划中）QuietChat.sln、src/QuietChat（WPF 外壳）、
 │                            src/QuietChat.Core（纯逻辑类库）、tests/
-└─ tools/probe/              可行性验证脚本
+└─ tools/                    probe/ 可行性验证脚本；brand/ 由 logo 生成各平台图标
 ```
 
 `windows/` 等开始写 Windows 版时再建。两端的目录一一对应：外壳按模块分目录，纯逻辑单独成库并带单元测试。

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
+  <defs><clipPath id="bubble"><path d="M34 24H66A14 14 0 0 1 80 38V54A14 14 0 0 1 66 68H42L28 78L31 66.5A14 14 0 0 1 20 54V38A14 14 0 0 1 34 24Z"/></clipPath></defs>
+  <rect width="100" height="100" rx="22" fill="#262A52"/>
+  <path d="M34 24H66A14 14 0 0 1 80 38V54A14 14 0 0 1 66 68H42L28 78L31 66.5A14 14 0 0 1 20 54V38A14 14 0 0 1 34 24Z" fill="#F5F1E8"/>
+  <rect x="0" y="45" width="100" height="40" fill="#8C90D6" clip-path="url(#bubble)"/>
+  <circle cx="33" cy="35" r="4.5" fill="#F2A93B"/>
+  <rect x="42" y="32.5" width="26" height="5" rx="2.5" fill="#B9B3A6"/>
+</svg>

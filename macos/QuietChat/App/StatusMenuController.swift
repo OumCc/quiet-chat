@@ -35,8 +35,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     /// 锁定状态变化后更新图标；菜单内容在每次打开时重建，无需主动刷新。
     func updateIcon() {
         let locked = delegate?.isLocked ?? true
-        let image = NSImage(systemSymbolName: locked ? "eye.slash" : "eye", accessibilityDescription: "QuietChat")
+        let image = NSImage(named: locked ? "MenuBarLocked" : "MenuBarUnlocked")
         image?.isTemplate = true
+        image?.accessibilityDescription = locked ? "QuietChat 已锁定" : "QuietChat 已解锁"
         statusItem.button?.image = image
     }
 
