@@ -42,6 +42,21 @@ struct ListColumnLayoutTests {
         #expect(layout.rect(in: window.offsetBy(dx: 300, dy: 200)) == CGRect(x: 470, y: 260, width: 250, height: 790))
     }
 
+    @Test func calibrationRoundsToWholePoints() {
+        // 拖动时的鼠标坐标带小数
+        let layout = ListColumnLayout(calibratedRect: CGRect(x: 170.4, y: 60.6, width: 250.3, height: 500), in: window)
+        #expect(layout == ListColumnLayout(leftInset: 70, topInset: 11, width: 251))
+    }
+
+    /// 回归：旧配置里的小数布局（真实数据，微信在左侧副屏上）会让遮罩右边缘留下一条半透明细线。
+    @Test func fractionalLayoutYieldsWholePointRect() throws {
+        let layout = ListColumnLayout(leftInset: 58.21875, topInset: 251, width: 236.78125)
+        let windowOnLeftDisplay = CGRect(x: -1176, y: 110, width: 935, height: 807)
+        let rect = try #require(layout.rect(in: windowOnLeftDisplay))
+        #expect(rect == CGRect(x: -1118, y: 361, width: 237, height: 556))
+        #expect(rect == rect.integral)
+    }
+
     @Test func calibrationIsClampedToWindowAndMinimumSize() {
         let outside = ListColumnLayout(calibratedRect: CGRect(x: 0, y: 0, width: 2000, height: 100), in: window)
         #expect(outside == ListColumnLayout(leftInset: 0, topInset: 0, width: 1000))
@@ -68,6 +83,12 @@ struct MaskPlannerTests {
         let plan = try #require(MaskPlanner.plan(windowFrame: window, layout: layout, occluders: [occluder, CGRect(x: 600, y: 0, width: 50, height: 50)]))
         #expect(plan.holes == [CGRect(x: 300, y: 100, width: 44, height: 200)])
         #expect(plan.holesInMaskCoordinates == [CGRect(x: 236, y: 100, width: 44, height: 200)])
+    }
+
+    @Test func holesAreWholePointsInsideMask() throws {
+        let occluder = CGRect(x: 300.5, y: 100.25, width: 500, height: 200)
+        let plan = try #require(MaskPlanner.plan(windowFrame: window, layout: layout, occluders: [occluder]))
+        #expect(plan.holes == [CGRect(x: 300, y: 100, width: 44, height: 201)])
     }
 
     @Test func showsWhenWindowIsOnScreen() {

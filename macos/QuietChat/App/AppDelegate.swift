@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tracker: WeChatWindowTracker?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        quitOtherInstances()
         config = loadConfig()
         maskController.layout = config.listColumn
         maskController.onCalibrationFinished = { [weak self] layout in self?.saveListColumn(layout) }
@@ -29,6 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.app.notice("辅助功能已授权")
                 self?.startTracking()
             }
+        }
+    }
+
+    /// 只保留一个实例：两个实例会画出两层遮罩。新实例（例如从 Xcode 重新运行的版本）接替旧实例。
+    private func quitOtherInstances() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+        for other in NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        where other != NSRunningApplication.current {
+            Log.app.notice("退出旧实例 pid=\(other.processIdentifier)")
+            other.terminate()
         }
     }
 

@@ -83,7 +83,8 @@ final class WeChatWindowTracker {
         }
         let occluders = WindowServer.occluders(
             above: windowID, excludingPIDs: [pid, ProcessInfo.processInfo.processIdentifier])
-        return WindowSnapshot(frame: info.frame, isOnScreen: true, occluders: occluders)
+        let isOnAllSpaces = (WindowServer.spaceCount(of: windowID) ?? 1) > 1
+        return WindowSnapshot(frame: info.frame, isOnScreen: true, isOnAllSpaces: isOnAllSpaces, occluders: occluders)
     }
 
     /// 最小化或微信被隐藏：可以确定主窗口不在任何桌面上显示。

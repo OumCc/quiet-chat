@@ -1,5 +1,6 @@
 // 聊天列表栏在微信主窗口内的位置（校准结果），以及由它推导出的屏幕矩形。
 // 约定：矩形均为 Quartz 全局坐标（左上原点、y 向下，单位 pt）；列表栏总是向下延伸到窗口底边。
+// 不变量：输出的矩形都落在整点上。小数坐标会让遮罩边缘出现半透明像素，看起来是一条细线，还会挡住点击。
 
 import CoreGraphics
 
@@ -27,7 +28,7 @@ public struct ListColumnLayout: Codable, Equatable, Sendable {
     /// 校准时允许的最小宽度和高度，防止把遮罩拖成一条线后无法再拖回来。
     public static let minimumLength: Double = 40
 
-    /// 列表栏在屏幕上的矩形，已裁剪到窗口范围内；窗口太小、没有交集时返回 nil。
+    /// 列表栏在屏幕上的矩形，已裁剪到窗口范围内并向外取整到整点；窗口太小、没有交集时返回 nil。
     public func rect(in windowFrame: CGRect) -> CGRect? {
         let column = CGRect(
             x: Double(windowFrame.minX) + leftInset,
@@ -35,19 +36,21 @@ public struct ListColumnLayout: Codable, Equatable, Sendable {
             width: width,
             height: Double(windowFrame.height) - topInset)
         let clipped = column.intersection(windowFrame)
-        return clipped.isNull || clipped.isEmpty ? nil : clipped
+        // 向外取整：宁可多遮半个点，也不留半透明的边
+        return clipped.isNull || clipped.isEmpty ? nil : clipped.integral
     }
 
-    /// 由校准时拖出的屏幕矩形反推布局。
+    /// 由校准时拖出的屏幕矩形反推布局，结果取整到整点。
     ///
     /// 先把矩形限制在窗口内，再保证最小尺寸；矩形的底边被忽略，因为列表栏总是延伸到窗口底边。
     public init(calibratedRect rect: CGRect, in windowFrame: CGRect) {
         let minLength = Self.minimumLength
         let windowWidth = Double(windowFrame.width)
         let windowHeight = Double(windowFrame.height)
-        let left = min(max(0, Double(rect.minX - windowFrame.minX)), max(0, windowWidth - minLength))
-        let right = min(max(Double(rect.maxX - windowFrame.minX), left + minLength), windowWidth)
-        let top = min(max(0, Double(rect.minY - windowFrame.minY)), max(0, windowHeight - minLength))
+        // 鼠标位置带小数，这里先取整再限制范围
+        let left = min(max(0, Double(rect.minX - windowFrame.minX).rounded()), max(0, windowWidth - minLength))
+        let right = min(max(Double(rect.maxX - windowFrame.minX).rounded(), left + minLength), windowWidth)
+        let top = min(max(0, Double(rect.minY - windowFrame.minY).rounded()), max(0, windowHeight - minLength))
         self.init(leftInset: left, topInset: top, width: max(0, right - left))
     }
 

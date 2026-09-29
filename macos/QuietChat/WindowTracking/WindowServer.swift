@@ -33,6 +33,16 @@ enum WindowServer {
         }
     }
 
+    /// 窗口同时属于几个桌面；私有接口不可用时返回 nil。
+    /// 被分配到"所有桌面"的窗口属于每一个桌面，数量大于 1。
+    static func spaceCount(of windowID: CGWindowID) -> Int? {
+        guard let mainConnectionID = SkyLight.mainConnectionID,
+              let copySpacesForWindows = SkyLight.copySpacesForWindows,
+              let spaces = copySpacesForWindows(mainConnectionID(), SkyLight.allSpacesMask, [windowID] as CFArray)
+        else { return nil }
+        return CFArrayGetCount(spaces.takeRetainedValue())
+    }
+
     /// 在指定进程的普通层级窗口中按外框查找窗口编号；私有接口取不到编号时兜底使用。
     static func windowID(ownedBy pid: pid_t, matching frame: CGRect) -> CGWindowID? {
         windowList([.optionAll], relativeTo: kCGNullWindowID).first { entry in
@@ -53,5 +63,24 @@ enum WindowServer {
     private static func bounds(of entry: [String: Any]) -> CGRect? {
         guard let dictionary = entry[kCGWindowBounds as String] as? NSDictionary else { return nil }
         return CGRect(dictionaryRepresentation: dictionary as CFDictionary)
+    }
+}
+
+// 私有接口（SkyLight）：查询窗口属于哪些桌面。公开接口无法判断窗口是否"分配给所有桌面"，
+// yabai、AltTab 等窗口工具长期使用它。这里用 dlsym 在运行时查找：将来系统移除时只会退化为
+// "当作只属于一个桌面"，不会让应用因为缺少符号而无法启动。
+private enum SkyLight {
+    typealias MainConnectionID = @convention(c) () -> Int32
+    typealias CopySpacesForWindows = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+
+    /// 当前、其他与用户桌面全部包含（kCGSAllSpacesMask）。
+    static let allSpacesMask: Int32 = 0x7
+    static let mainConnectionID: MainConnectionID? = symbol("CGSMainConnectionID")
+    static let copySpacesForWindows: CopySpacesForWindows? = symbol("CGSCopySpacesForWindows")
+
+    private static func symbol<T>(_ name: String) -> T? {
+        // RTLD_DEFAULT：在所有已加载的镜像中查找
+        guard let address = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }
+        return unsafeBitCast(address, to: T.self)
     }
 }

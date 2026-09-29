@@ -17,8 +17,27 @@ final class MaskPanel: NSPanel {
         hasShadow = false
         isReleasedWhenClosed = false
         animationBehavior = .none
-        // 归属于所在桌面（不跟到其他桌面），允许出现在全屏应用的桌面上，不参与 ⌘` 窗口切换
-        collectionBehavior = [.managed, .fullScreenAuxiliary, .ignoresCycle]
+        // transient：不出现在调度中心（managed 会显示成一个单独的窗口），仍然只属于一个桌面；
+        // moveToActiveSpace：重新显示时落到当前桌面（微信被移到别的桌面、进入全屏时需要）；
+        // 允许出现在全屏应用的桌面上，不参与 ⌘` 窗口切换
+        collectionBehavior = [.transient, .moveToActiveSpace, .fullScreenAuxiliary, .ignoresCycle]
+    }
+
+    /// 是否出现在所有桌面上：跟随微信主窗口的"分配给所有桌面"设置。
+    /// 否则遮罩只属于微信所在的桌面，切换桌面时两者一起滑入滑出。
+    var joinsAllSpaces: Bool {
+        get { collectionBehavior.contains(.canJoinAllSpaces) }
+        set {
+            guard newValue != joinsAllSpaces else { return }
+            // canJoinAllSpaces 与 moveToActiveSpace 互斥
+            if newValue {
+                collectionBehavior.remove(.moveToActiveSpace)
+                collectionBehavior.insert(.canJoinAllSpaces)
+            } else {
+                collectionBehavior.remove(.canJoinAllSpaces)
+                collectionBehavior.insert(.moveToActiveSpace)
+            }
+        }
     }
 
     override var canBecomeKey: Bool { false }

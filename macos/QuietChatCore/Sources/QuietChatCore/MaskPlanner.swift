@@ -34,12 +34,14 @@ public enum MaskDecision: Equatable, Sendable {
 
 /// 遮罩的几何计算与显示规则。
 public enum MaskPlanner {
-    /// 计算遮罩的位置和洞；列表栏与窗口没有交集时返回 nil。
+    /// 计算遮罩的位置和洞；列表栏与窗口没有交集时返回 nil。遮罩和洞都落在整点上。
     public static func plan(windowFrame: CGRect, layout: ListColumnLayout, occluders: [CGRect]) -> MaskPlan? {
         guard let maskRect = layout.rect(in: windowFrame) else { return nil }
         let holes = occluders.compactMap { occluder -> CGRect? in
             let overlap = occluder.intersection(maskRect)
-            return overlap.isNull || overlap.isEmpty ? nil : overlap
+            guard !overlap.isNull, !overlap.isEmpty else { return nil }
+            // 洞向外取整后再裁回遮罩内：上层窗口边缘不会压着一条没清干净的遮罩
+            return overlap.integral.intersection(maskRect)
         }
         return MaskPlan(maskRect: maskRect, holes: holes)
     }

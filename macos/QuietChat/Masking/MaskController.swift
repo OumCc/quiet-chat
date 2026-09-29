@@ -25,6 +25,8 @@ final class MaskController {
     private let view = MaskView()
     private var snapshot: WindowSnapshot?
     private var calibrationDraft: ListColumnLayout?
+    private var lastRelocation = Date.distantPast
+    private static let relocationInterval: TimeInterval = 0.5
 
     /// 遮罩是否正显示在当前桌面上。
     var isShowing: Bool { panel.isVisible && panel.isOnActiveSpace }
@@ -91,7 +93,7 @@ final class MaskController {
             maskIsOnActiveSpace: panel.isOnActiveSpace)
         switch decision {
         case .show(let plan):
-            show(plan)
+            show(plan, onAllSpaces: snapshot?.isOnAllSpaces == true)
         case .hide:
             hide()
         case .keep:
@@ -99,18 +101,28 @@ final class MaskController {
         }
     }
 
-    private func show(_ plan: MaskPlan) {
+    private func show(_ plan: MaskPlan, onAllSpaces: Bool) {
+        if panel.joinsAllSpaces != onAllSpaces {
+            panel.joinsAllSpaces = onAllSpaces
+            Log.mask.notice("遮罩\(onAllSpaces ? "出现在所有桌面" : "只跟随微信所在桌面", privacy: .public)")
+        }
         let frame = GlobalCoordinates.flip(plan.maskRect, primaryScreenHeight: Self.primaryScreenHeight)
         if panel.frame != frame {
             panel.setFrame(frame, display: true)
         }
         // 校准时需要看清整个区域，不开洞
         view.holes = mode == .calibrating ? [] : plan.holesInMaskCoordinates
-        if !panel.isVisible || !panel.isOnActiveSpace {
-            // 先移出再放回：放回时面板会落到当前桌面（例如微信窗口被移到了别的桌面）
-            panel.orderOut(nil)
+
+        if !panel.isVisible {
             panel.orderFrontRegardless()
             Log.mask.notice("显示遮罩 \(String(describing: plan.maskRect), privacy: .public)")
+        } else if !panel.isOnActiveSpace, Date().timeIntervalSince(lastRelocation) > Self.relocationInterval {
+            // 微信出现在当前桌面、遮罩却留在别的桌面（微信被移过来、进入全屏）：移出再放回，放回时落到当前桌面。
+            // 限制频率：万一系统没有移动面板，也不会每帧反复移出移入
+            lastRelocation = Date()
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+            Log.mask.notice("遮罩移到当前桌面")
         }
     }
 
