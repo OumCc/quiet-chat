@@ -12,10 +12,19 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     /// 聊天列表栏的位置（校准结果）。
     public var listColumn: ListColumnLayout
+    /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
+    public var password: PasswordRecord?
+    /// 遮罩上的密码框是否隐藏输入内容；默认明文显示，记住用户最后一次的选择。
+    public var hidePasswordInput: Bool
 
-    public init(schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default) {
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
+        password: PasswordRecord? = nil, hidePasswordInput: Bool = false
+    ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
+        self.password = password
+        self.hidePasswordInput = hidePasswordInput
     }
 
     public static let `default` = AppConfig()
@@ -24,6 +33,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         listColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .listColumn) ?? .default
+        password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
+        hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
     }
 }
 

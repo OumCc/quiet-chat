@@ -12,11 +12,16 @@ struct AppConfigTests {
         #expect(try temporaryStore().load() == .default)
     }
 
+    /// 所有字段都有值的配置，用来检查读写和 schema 一致性。
+    private let fullConfig = AppConfig(
+        listColumn: ListColumnLayout(leftInset: 70, topInset: 12, width: 300),
+        password: PasswordRecord(iterations: 100_000, salt: "c2FsdA==", hash: "aGFzaA=="),
+        hidePasswordInput: true)
+
     @Test func savedConfigRoundTrips() throws {
         let store = temporaryStore()
-        let config = AppConfig(listColumn: ListColumnLayout(leftInset: 70, topInset: 12, width: 300))
-        try store.save(config)
-        #expect(try store.load() == config)
+        try store.save(fullConfig)
+        #expect(try store.load() == fullConfig)
     }
 
     @Test func missingFieldsFallBackToDefaultsAndUnknownFieldsAreIgnored() throws {
@@ -24,6 +29,9 @@ struct AppConfigTests {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(config.schemaVersion == AppConfig.currentSchemaVersion)
         #expect(config.listColumn == ListColumnLayout(leftInset: 64, topInset: 0, width: 300))
+        #expect(config.password == nil)
+        // 密码框默认明文显示
+        #expect(config.hidePasswordInput == false)
     }
 
     @Test func corruptFileThrows() throws {
@@ -33,7 +41,8 @@ struct AppConfigTests {
         #expect(throws: (any Error).self) { try store.load() }
     }
 
-    /// 两端共用 shared/config.schema.json：这里保证 Swift 模型写出的字段与 schema 完全一致（不多也不少）。
+    /// 两端共用 shared/config.schema.json：保证 Swift 模型写出的字段与 schema 完全一致（不多也不少）。
+    /// 用所有字段都有值的配置检查，因为值为空的可选字段不会写出。
     @Test func encodedFieldsMatchSharedSchema() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // QuietChatCoreTests
@@ -43,7 +52,7 @@ struct AppConfigTests {
             .deletingLastPathComponent()
         let schemaData = try Data(contentsOf: repositoryRoot.appending(components: "shared", "config.schema.json"))
         let schema = try #require(try JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
-        let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.default)) as? [String: Any])
+        let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
         try expectSameFields(schema: schema, value: encoded, path: "$")
     }
 

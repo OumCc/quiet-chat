@@ -1,5 +1,6 @@
 // 应用装配：加载配置、处理辅助功能授权、随微信进程启动/退出创建或销毁窗口跟踪器，
-// 并在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」）。
+// 在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」），
+// 并维护锁定状态：密码解锁、主窗口关闭时自动锁定（见「锁定与解锁」）。
 
 import AppKit
 import QuietChatCore
@@ -8,6 +9,7 @@ import QuietChatCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let configStore = ConfigStore(fileURL: ConfigStore.defaultFileURL)
     private var config = AppConfig.default
+    private var lockState = LockState()
     private let permission = AccessibilityPermission()
     private let maskController = MaskController()
     private var statusMenu: StatusMenuController?
@@ -19,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config = loadConfig()
         maskController.layout = config.listColumn
         maskController.onCalibrationFinished = { [weak self] layout in self?.saveListColumn(layout) }
+        maskController.onUnlockAttempt = { [weak self] password in self?.attemptUnlock(with: password) ?? false }
+        maskController.hidesPasswordInput = config.hidePasswordInput
+        maskController.onPasswordVisibilityChange = { [weak self] hidden in self?.saveHidePasswordInput(hidden) }
         statusMenu = StatusMenuController(delegate: self)
 
         if permission.isGranted {
@@ -96,7 +101,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
-        maskController.update(snapshot: tracker?.snapshot())
+        let snapshot = tracker?.snapshot()
+        if lockState.autoLockIfNeeded(for: snapshot) {
+            Log.app.notice("微信主窗口已关闭，自动锁定")
+            applyLockState()
+        }
+        maskController.update(snapshot: snapshot)
+    }
+
+    // MARK: - 锁定
+
+    private func attemptUnlock(with password: String) -> Bool {
+        guard PasswordVerifier.verify(password, against: config.password) else {
+            Log.app.notice("解锁失败：密码错误")
+            return false
+        }
+        lockState.unlock()
+        Log.app.notice("已解锁")
+        applyLockState()
+        return true
+    }
+
+    private func applyLockState() {
+        maskController.isLocked = lockState.isLocked
+        statusMenu?.updateIcon()
     }
 
     // MARK: - 配置
@@ -120,6 +148,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private func saveHidePasswordInput(_ hidden: Bool) {
+        config.hidePasswordInput = hidden
+        do {
+            try configStore.save(config)
+        } catch {
+            // 只是显示偏好：保存失败本次仍然生效，下次启动回到原来的选择
+            Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// 保存新的密码记录（nil 表示恢复默认密码）。写入成功才生效，避免"这次能用、重启后又变回旧密码"。
+    private func savePassword(_ record: PasswordRecord?) -> Bool {
+        var updated = config
+        updated.password = record
+        do {
+            try configStore.save(updated)
+            config = updated
+            return true
+        } catch {
+            Log.app.error("密码保存失败：\(error.localizedDescription, privacy: .public)")
+            let alert = NSAlert(error: error)
+            alert.messageText = "密码没有保存成功，仍使用原来的密码"
+            alert.runModal()
+            return false
+        }
+    }
 }
 
 // MARK: - 菜单栏
@@ -127,16 +182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: StatusMenuDelegate {
     var statusDescription: String {
         guard permission.isGranted else { return "需要辅助功能权限" }
-        guard let tracker else { return "微信未运行" }
-        guard tracker.hasMainWindow else { return "未找到微信主窗口" }
         if maskController.mode == .calibrating { return "正在校准遮罩位置" }
-        guard maskController.isEnabled else { return "遮罩已关闭" }
-        return maskController.isShowing ? "遮罩生效中" : "微信窗口未显示"
+        guard lockState.isLocked else { return "已解锁" }
+        guard tracker != nil else { return "已锁定 · 微信未运行" }
+        return maskController.isShowing ? "已锁定 · 在遮罩上输入密码解锁" : "已锁定 · 微信窗口未显示"
     }
 
     var needsAccessibilityPermission: Bool { !permission.isGranted }
 
-    var isMaskEnabled: Bool { maskController.isEnabled }
+    var isLocked: Bool { lockState.isLocked }
 
     var canCalibrate: Bool { maskController.canCalibrate }
 
@@ -145,9 +199,35 @@ extension AppDelegate: StatusMenuDelegate {
         permission.openSystemSettings()
     }
 
-    func toggleMask() {
-        maskController.isEnabled.toggle()
-        refresh()
+    func lockNow() {
+        lockState.lock()
+        Log.app.notice("手动锁定")
+        applyLockState()
+    }
+
+    func changePassword() {
+        guard !lockState.isLocked, let newPassword = PasswordChangeDialog.run() else { return }
+        guard let record = PasswordVerifier.makeRecord(for: newPassword) else {
+            Log.app.error("生成密码记录失败")
+            return
+        }
+        if savePassword(record) {
+            Log.app.notice("已修改解锁密码")
+        }
+    }
+
+    /// 锁定时也能用：只把密码改回默认值，不解锁也不锁定。
+    func resetPassword() {
+        let alert = NSAlert()
+        alert.messageText = "是否恢复默认密码：\(PasswordVerifier.defaultPassword)"
+        alert.addButton(withTitle: "恢复默认密码")
+        alert.addButton(withTitle: "取消")
+        // 菜单栏应用平时不在前台，先激活，对话框才会出现在最前面
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if savePassword(nil) {
+            Log.app.notice("已恢复默认密码")
+        }
     }
 
     func beginCalibration() {

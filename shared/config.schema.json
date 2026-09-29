@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "QuietChat 配置",
-  "description": "macOS 与 Windows 共用的配置格式。写入时输出全部字段；读取时缺失字段取 default，未知字段忽略。长度单位为逻辑像素（macOS 为 pt，Windows 为 DIP），位置相对微信主窗口外框的左上角。",
+  "description": "macOS 与 Windows 共用的配置格式。写入时输出全部非空字段；读取时缺失字段取 default，未知字段忽略。长度单位为逻辑像素（macOS 为 pt，Windows 为 DIP），位置相对微信主窗口外框的左上角。",
   "type": "object",
   "properties": {
     "schemaVersion": {
@@ -31,6 +31,35 @@
           "type": "number",
           "minimum": 0,
           "default": 280
+        }
+      }
+    },
+    "hidePasswordInput": {
+      "description": "遮罩上的密码框是否隐藏输入内容。默认明文显示；用户点击密码框右侧的按钮切换，程序记住最后一次的选择。",
+      "type": "boolean",
+      "default": false
+    },
+    "password": {
+      "description": "用户修改后的解锁密码，只保存 PBKDF2-HMAC-SHA256 的派生结果，不保存明文。缺失表示使用默认密码 1234567890（「恢复默认密码」会删除这个字段）。密码按 UTF-8 编码参与计算。",
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "description": "目前只有 PBKDF2-SHA256。",
+          "type": "string",
+          "const": "PBKDF2-SHA256"
+        },
+        "iterations": {
+          "description": "迭代次数，新密码使用 100000。",
+          "type": "integer",
+          "minimum": 1
+        },
+        "salt": {
+          "description": "Base64 编码的随机盐（新密码为 16 字节）。",
+          "type": "string"
+        },
+        "hash": {
+          "description": "Base64 编码的派生结果（新密码为 32 字节）。",
+          "type": "string"
         }
       }
     }

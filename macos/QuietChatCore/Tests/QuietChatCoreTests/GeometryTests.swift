@@ -91,29 +91,52 @@ struct MaskPlannerTests {
         #expect(plan.holes == [CGRect(x: 300, y: 100, width: 44, height: 201)])
     }
 
-    @Test func showsWhenWindowIsOnScreen() {
-        let snapshot = WindowSnapshot(frame: window, isOnScreen: true)
+    @Test func showsWhenWindowIsVisible() {
+        let snapshot = WindowSnapshot(frame: window, presence: .visible)
         let decision = MaskPlanner.decide(snapshot: snapshot, layout: layout, maskIsOnActiveSpace: false)
         #expect(decision == .show(MaskPlan(maskRect: CGRect(x: 64, y: 0, width: 280, height: 800), holes: [])))
     }
 
-    @Test func hidesWithoutWindowOrWhenExplicitlyHidden() {
+    @Test func hidesWithoutWindowOrWhenClosed() {
         #expect(MaskPlanner.decide(snapshot: nil, layout: layout, maskIsOnActiveSpace: true) == .hide)
-        let minimized = WindowSnapshot(frame: window, isOnScreen: false, isExplicitlyHidden: true)
-        #expect(MaskPlanner.decide(snapshot: minimized, layout: layout, maskIsOnActiveSpace: false) == .hide)
+        let closed = WindowSnapshot(frame: window, presence: .closed)
+        #expect(MaskPlanner.decide(snapshot: closed, layout: layout, maskIsOnActiveSpace: false) == .hide)
     }
 
-    @Test func offScreenWindowHidesOnlyIfMaskIsOnActiveSpace() {
-        let offScreen = WindowSnapshot(frame: window, isOnScreen: false)
-        // 遮罩在当前桌面而窗口不在：窗口被关闭或移走
-        #expect(MaskPlanner.decide(snapshot: offScreen, layout: layout, maskIsOnActiveSpace: true) == .hide)
+    @Test func windowOnOtherSpaceHidesOnlyIfMaskIsOnActiveSpace() {
+        let elsewhere = WindowSnapshot(frame: window, presence: .onOtherSpace)
+        // 遮罩在当前桌面而窗口不在：微信被移到了别的桌面
+        #expect(MaskPlanner.decide(snapshot: elsewhere, layout: layout, maskIsOnActiveSpace: true) == .hide)
         // 两者都不在当前桌面：用户切到了别的桌面，遮罩留在微信所在的桌面
-        #expect(MaskPlanner.decide(snapshot: offScreen, layout: layout, maskIsOnActiveSpace: false) == .keep)
+        #expect(MaskPlanner.decide(snapshot: elsewhere, layout: layout, maskIsOnActiveSpace: false) == .keep)
     }
 
     @Test func hidesWhenColumnDoesNotFitWindow() {
-        let tiny = WindowSnapshot(frame: CGRect(x: 0, y: 0, width: 50, height: 800), isOnScreen: true)
+        let tiny = WindowSnapshot(frame: CGRect(x: 0, y: 0, width: 50, height: 800), presence: .visible)
         #expect(MaskPlanner.decide(snapshot: tiny, layout: layout, maskIsOnActiveSpace: true) == .hide)
+    }
+}
+
+struct WindowPresenceTests {
+    @Test func onScreenWindowIsVisible() {
+        #expect(WindowPresence.classify(isOnScreen: true, isExplicitlyHidden: false, spaceCount: 1) == .visible)
+    }
+
+    @Test func minimizedOrHiddenWindowIsClosed() {
+        #expect(WindowPresence.classify(isOnScreen: false, isExplicitlyHidden: true, spaceCount: 1) == .closed)
+    }
+
+    @Test func offScreenWindowStillOnASpaceIsElsewhere() {
+        #expect(WindowPresence.classify(isOnScreen: false, isExplicitlyHidden: false, spaceCount: 1) == .onOtherSpace)
+    }
+
+    @Test func offScreenWindowOnNoSpaceIsClosed() {
+        #expect(WindowPresence.classify(isOnScreen: false, isExplicitlyHidden: false, spaceCount: 0) == .closed)
+    }
+
+    @Test func unknownSpacesCountAsClosed() {
+        // 私有接口不可用：宁可多锁一次
+        #expect(WindowPresence.classify(isOnScreen: false, isExplicitlyHidden: false, spaceCount: nil) == .closed)
     }
 }
 

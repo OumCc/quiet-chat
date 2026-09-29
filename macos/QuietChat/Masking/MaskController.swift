@@ -1,5 +1,5 @@
-// 遮罩控制：把微信主窗口快照交给 MaskPlanner 决策，再落实到遮罩面板的位置、洞和可见性；并管理校准流程。
-// 显示规则见 docs/architecture.md「显示规则」；这里只负责执行决策和坐标换算。
+// 遮罩控制：把微信主窗口快照交给 MaskPlanner 决策，再落实到遮罩面板的位置、洞和可见性；并管理密码输入和校准流程。
+// 显示规则见 docs/architecture.md「显示规则」；锁定状态由调用方决定，这里只负责执行决策和坐标换算。
 
 import AppKit
 import QuietChatCore
@@ -13,10 +13,25 @@ final class MaskController {
 
     /// 列表栏布局（校准结果）。
     var layout: ListColumnLayout = .default
-    /// 用户手动开关遮罩；M1 调试用，M2 起由锁定状态决定。
-    var isEnabled = true {
-        didSet { render() }
+    /// 是否锁定：锁定时显示遮罩和密码框，解锁后收起。
+    var isLocked = true {
+        didSet {
+            guard isLocked != oldValue else { return }
+            // 校准时遮罩是半透明的，锁定时必须放弃校准，否则隔着它能看到列表
+            if isLocked { endCalibration(save: false) }
+            view.resetPasswordField()
+            render()
+        }
     }
+    /// 用户在遮罩上提交了密码；返回密码是否正确。正确时由调用方把 isLocked 置为 false。
+    var onUnlockAttempt: ((String) -> Bool)?
+    /// 密码框是否隐藏输入内容（用户上次的选择）。
+    var hidesPasswordInput: Bool {
+        get { view.hidesPasswordInput }
+        set { view.hidesPasswordInput = newValue }
+    }
+    /// 用户切换了密码框的显示方式，需要记住；参数为是否隐藏输入。
+    var onPasswordVisibilityChange: ((Bool) -> Void)?
     /// 校准完成、需要保存布局时回调。
     var onCalibrationFinished: ((ListColumnLayout) -> Void)?
 
@@ -31,11 +46,18 @@ final class MaskController {
     /// 遮罩是否正显示在当前桌面上。
     var isShowing: Bool { panel.isVisible && panel.isOnActiveSpace }
 
-    /// 只有主窗口在当前桌面可见、且不在校准中时才能开始校准。
-    var canCalibrate: Bool { mode == .masking && snapshot?.isOnScreen == true }
+    /// 解锁状态下、主窗口在当前桌面可见时才能校准：校准时遮罩半透明，看得到列表，不能拿来绕过锁定。
+    var canCalibrate: Bool { mode == .masking && !isLocked && snapshot?.presence == .visible }
 
     init() {
         panel.contentView = view
+        view.onPasswordSubmit = { [weak self] password in
+            guard let self else { return }
+            if self.onUnlockAttempt?(password) != true {
+                self.view.showWrongPassword()
+            }
+        }
+        view.onPasswordVisibilityChange = { [weak self] hidden in self?.onPasswordVisibilityChange?(hidden) }
         view.onEdgeDrag = { [weak self] frame in self?.dragCalibration(to: frame) }
         view.onFinishCalibration = { [weak self] in self?.endCalibration(save: true) }
         view.onCancelCalibration = { [weak self] in self?.endCalibration(save: false) }
@@ -47,7 +69,7 @@ final class MaskController {
 
     func update(snapshot: WindowSnapshot?) {
         self.snapshot = snapshot
-        if mode == .calibrating, snapshot?.isOnScreen != true {
+        if mode == .calibrating, snapshot?.presence != .visible {
             // 窗口不见了，校准失去参照，直接放弃
             endCalibration(save: false)
         }
@@ -88,7 +110,7 @@ final class MaskController {
     private func render() {
         let calibrating = mode == .calibrating
         let decision = MaskPlanner.decide(
-            snapshot: isEnabled || calibrating ? snapshot : nil,
+            snapshot: isLocked || calibrating ? snapshot : nil,
             layout: calibrating ? calibrationDraft ?? layout : layout,
             maskIsOnActiveSpace: panel.isOnActiveSpace)
         switch decision {

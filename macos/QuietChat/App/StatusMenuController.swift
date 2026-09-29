@@ -1,5 +1,5 @@
-// 菜单栏图标与菜单：显示当前状态，提供授权入口、遮罩开关、校准和退出。
-// 遮罩开关只在 M1 使用；M2 起改为"锁定 / 解锁"，关闭遮罩需要密码。
+// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准和退出。
+// 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码和校准需要先解锁，恢复默认密码不受锁定限制。
 
 import AppKit
 
@@ -8,10 +8,12 @@ import AppKit
 protocol StatusMenuDelegate: AnyObject {
     var statusDescription: String { get }
     var needsAccessibilityPermission: Bool { get }
-    var isMaskEnabled: Bool { get }
+    var isLocked: Bool { get }
     var canCalibrate: Bool { get }
     func requestAccessibilityPermission()
-    func toggleMask()
+    func lockNow()
+    func changePassword()
+    func resetPassword()
     func beginCalibration()
 }
 
@@ -30,10 +32,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         updateIcon()
     }
 
-    /// 遮罩开关变化后更新图标；菜单内容在每次打开时重建，无需主动刷新。
+    /// 锁定状态变化后更新图标；菜单内容在每次打开时重建，无需主动刷新。
     func updateIcon() {
-        let enabled = delegate?.isMaskEnabled ?? true
-        let image = NSImage(systemSymbolName: enabled ? "eye.slash" : "eye", accessibilityDescription: "QuietChat")
+        let locked = delegate?.isLocked ?? true
+        let image = NSImage(systemSymbolName: locked ? "eye.slash" : "eye", accessibilityDescription: "QuietChat")
         image?.isTemplate = true
         statusItem.button?.image = image
     }
@@ -42,20 +44,26 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         guard let delegate else { return }
 
-        let status = NSMenuItem(title: delegate.statusDescription, action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(status)
+        menu.addItem(makeDisabledItem(delegate.statusDescription))
         if delegate.needsAccessibilityPermission {
             menu.addItem(makeItem("授予辅助功能权限…", #selector(requestPermission)))
         }
 
         menu.addItem(.separator())
-        let toggle = makeItem("启用遮罩", #selector(toggleMask))
-        toggle.state = delegate.isMaskEnabled ? .on : .off
-        menu.addItem(toggle)
+        let unlocked = !delegate.isLocked
+        let lock = makeItem("立即锁定", #selector(lockNow))
+        lock.isEnabled = unlocked
+        menu.addItem(lock)
+        let password = makeItem("修改密码…", #selector(changePassword))
+        password.isEnabled = unlocked
+        menu.addItem(password)
+        menu.addItem(makeItem("恢复默认密码…", #selector(resetPassword)))
         let calibrate = makeItem("校准遮罩位置…", #selector(beginCalibration))
         calibrate.isEnabled = delegate.canCalibrate
         menu.addItem(calibrate)
+        if delegate.isLocked {
+            menu.addItem(makeDisabledItem("解锁后才能修改密码和校准"))
+        }
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 QuietChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -67,12 +75,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         return item
     }
 
-    @objc private func requestPermission() { delegate?.requestAccessibilityPermission() }
-
-    @objc private func toggleMask() {
-        delegate?.toggleMask()
-        updateIcon()
+    private func makeDisabledItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
     }
 
+    @objc private func requestPermission() { delegate?.requestAccessibilityPermission() }
+    @objc private func lockNow() { delegate?.lockNow() }
+    @objc private func changePassword() { delegate?.changePassword() }
+    @objc private func resetPassword() { delegate?.resetPassword() }
     @objc private func beginCalibration() { delegate?.beginCalibration() }
 }

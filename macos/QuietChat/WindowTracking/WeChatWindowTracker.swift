@@ -1,6 +1,6 @@
 // 跟踪一个微信进程的聊天主窗口。
 // 职责：用辅助功能接口识别主窗口并监听事件（移动、缩放、最小化、销毁、应用隐藏/激活），事件到来时回调 onChange；
-// 位置、是否在屏、上方的遮挡窗口等实时数据由 snapshot() 从窗口服务器读取。
+// 位置、显示状态（当前桌面 / 其他桌面 / 已关闭）、上方的遮挡窗口等实时数据由 snapshot() 从窗口服务器读取。
 // 不变量：start() 与 stop() 成对调用，stop() 之前不得释放本对象——AXObserver 回调持有它的非保留指针。
 
 import AppKit
@@ -27,8 +27,7 @@ final class WeChatWindowTracker {
     private var mainWindow: AXUIElement?
     private var mainWindowID: CGWindowID?
     private var lastResolveAttempt = Date.distantPast
-
-    var hasMainWindow: Bool { mainWindowID != nil }
+    private var lastPresence: WindowPresence?
 
     init(pid: pid_t) {
         self.pid = pid
@@ -78,13 +77,26 @@ final class WeChatWindowTracker {
             forgetMainWindow()
             return nil
         }
+        let spaceCount = WindowServer.spaceCount(of: windowID)
         guard info.isOnScreen else {
-            return WindowSnapshot(frame: info.frame, isOnScreen: false, isExplicitlyHidden: isExplicitlyHidden)
+            let presence = WindowPresence.classify(
+                isOnScreen: false, isExplicitlyHidden: isExplicitlyHidden, spaceCount: spaceCount)
+            logPresenceChange(presence, spaceCount: spaceCount)
+            return WindowSnapshot(frame: info.frame, presence: presence)
         }
+        logPresenceChange(.visible, spaceCount: spaceCount)
         let occluders = WindowServer.occluders(
             above: windowID, excludingPIDs: [pid, ProcessInfo.processInfo.processIdentifier])
-        let isOnAllSpaces = (WindowServer.spaceCount(of: windowID) ?? 1) > 1
-        return WindowSnapshot(frame: info.frame, isOnScreen: true, isOnAllSpaces: isOnAllSpaces, occluders: occluders)
+        return WindowSnapshot(
+            frame: info.frame, presence: .visible, isOnAllSpaces: (spaceCount ?? 1) > 1, occluders: occluders)
+    }
+
+    // 状态变化时记一笔，便于核对"关闭"与"在其他桌面"的判断依据
+    private func logPresenceChange(_ presence: WindowPresence, spaceCount: Int?) {
+        guard presence != lastPresence else { return }
+        lastPresence = presence
+        Log.tracking.notice(
+            "主窗口状态：\(String(describing: presence), privacy: .public)，所属桌面数=\(spaceCount.map(String.init) ?? "未知", privacy: .public)")
     }
 
     /// 最小化或微信被隐藏：可以确定主窗口不在任何桌面上显示。

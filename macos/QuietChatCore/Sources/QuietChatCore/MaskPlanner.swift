@@ -52,13 +52,17 @@ public enum MaskPlanner {
     ///   - maskIsOnActiveSpace: 遮罩窗口此刻是否位于当前桌面。
     public static func decide(snapshot: WindowSnapshot?, layout: ListColumnLayout, maskIsOnActiveSpace: Bool) -> MaskDecision {
         guard let snapshot else { return .hide }
-        guard snapshot.isOnScreen else {
-            // 遮罩也在当前桌面，说明是窗口被关闭或移走，而不是用户切到了别的桌面
-            return snapshot.isExplicitlyHidden || maskIsOnActiveSpace ? .hide : .keep
-        }
-        guard let plan = plan(windowFrame: snapshot.frame, layout: layout, occluders: snapshot.occluders) else {
+        switch snapshot.presence {
+        case .closed:
             return .hide
+        case .onOtherSpace:
+            // 遮罩还在当前桌面，说明是微信被移走了；否则两者一起留在微信所在的桌面，切回来时一起出现
+            return maskIsOnActiveSpace ? .hide : .keep
+        case .visible:
+            guard let plan = plan(windowFrame: snapshot.frame, layout: layout, occluders: snapshot.occluders) else {
+                return .hide
+            }
+            return .show(plan)
         }
-        return .show(plan)
     }
 }

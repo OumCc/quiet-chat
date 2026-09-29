@@ -1,4 +1,4 @@
-// 遮罩窗口：无边框、点击时不激活本应用的浮动面板。
+// 遮罩窗口：无边框、点击时不激活本应用的浮动面板，锁定时承载密码框。
 // 始终处于 floating 层级、高于所有普通窗口，所以微信被点击、窗口被提到最前时也盖不过它；
 // 压在微信之上的其他窗口，由 MaskView 在对应区域开洞让出（见 QuietChatCore.MaskPlanner）。
 
@@ -21,6 +21,9 @@ final class MaskPanel: NSPanel {
         // moveToActiveSpace：重新显示时落到当前桌面（微信被移到别的桌面、进入全屏时需要）；
         // 允许出现在全屏应用的桌面上，不参与 ⌘` 窗口切换
         collectionBehavior = [.transient, .moveToActiveSpace, .fullScreenAuxiliary, .ignoresCycle]
+        // 只有点击密码框时才成为 key window 接收键盘输入，点遮罩其他位置不会抢走微信的键盘焦点；
+        // 非激活面板成为 key window 时不会激活本应用，微信仍在前台
+        becomesKeyOnlyIfNeeded = true
     }
 
     /// 是否出现在所有桌面上：跟随微信主窗口的"分配给所有桌面"设置。
@@ -40,6 +43,6 @@ final class MaskPanel: NSPanel {
         }
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
