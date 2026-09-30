@@ -1,7 +1,9 @@
-// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、开机自启动和退出。
-// 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码和校准需要先解锁，恢复默认密码和开机自启动不受锁定限制。
+// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、开机自启动和退出。
+// 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
+// 恢复默认密码、切换遮挡方式和开机自启动不受锁定限制。
 
 import AppKit
+import QuietChatCore
 
 /// 菜单所需的状态与操作，由 AppDelegate 提供。
 @MainActor
@@ -11,7 +13,15 @@ protocol StatusMenuDelegate: AnyObject {
     var isLocked: Bool { get }
     var canCalibrate: Bool { get }
     var launchesAtLogin: Bool { get }
+    var maskMode: MaskMode { get }
+    /// 精准遮挡且已解锁时才能编辑白名单。
+    var canEditWhitelist: Bool { get }
+    /// 选了精准遮挡，但没有屏幕录制权限或读取画面失败。
+    var needsScreenRecordingPermission: Bool { get }
     func requestAccessibilityPermission()
+    func requestScreenRecordingPermission()
+    func selectMaskMode(_ mode: MaskMode)
+    func editWhitelist()
     func lockNow()
     func changePassword()
     func resetPassword()
@@ -51,6 +61,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if delegate.needsAccessibilityPermission {
             menu.addItem(makeItem("授予辅助功能权限…", #selector(requestPermission)))
         }
+        if delegate.needsScreenRecordingPermission {
+            menu.addItem(makeItem("授予屏幕录制权限…", #selector(requestScreenRecordingPermission)))
+        }
 
         menu.addItem(.separator())
         let unlocked = !delegate.isLocked
@@ -65,8 +78,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         calibrate.isEnabled = delegate.canCalibrate
         menu.addItem(calibrate)
         if delegate.isLocked {
-            menu.addItem(makeDisabledItem("解锁后才能修改密码和校准"))
+            menu.addItem(makeDisabledItem("解锁后才能修改密码、校准和编辑白名单"))
         }
+
+        menu.addItem(.separator())
+        menu.addItem(.sectionHeader(title: "遮挡方式"))
+        let fullMask = makeItem("整块遮挡", #selector(selectFullMask))
+        fullMask.state = delegate.maskMode == .full ? .on : .off
+        menu.addItem(fullMask)
+        let preciseMask = makeItem("精准遮挡（只露出白名单）", #selector(selectPreciseMask))
+        preciseMask.state = delegate.maskMode == .precise ? .on : .off
+        menu.addItem(preciseMask)
+        let whitelist = makeItem("编辑白名单…", #selector(editWhitelist))
+        whitelist.isEnabled = delegate.canEditWhitelist
+        menu.addItem(whitelist)
 
         menu.addItem(.separator())
         let launchAtLogin = makeItem("开机自启动", #selector(toggleLaunchAtLogin))
@@ -90,6 +115,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func requestPermission() { delegate?.requestAccessibilityPermission() }
+    @objc private func requestScreenRecordingPermission() { delegate?.requestScreenRecordingPermission() }
+    @objc private func selectFullMask() { delegate?.selectMaskMode(.full) }
+    @objc private func selectPreciseMask() { delegate?.selectMaskMode(.precise) }
+    @objc private func editWhitelist() { delegate?.editWhitelist() }
     @objc private func lockNow() { delegate?.lockNow() }
     @objc private func changePassword() { delegate?.changePassword() }
     @objc private func resetPassword() { delegate?.resetPassword() }

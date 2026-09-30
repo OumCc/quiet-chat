@@ -11,8 +11,25 @@ final class MaskController {
         case calibrating
     }
 
-    /// 列表栏布局（校准结果）。
+    /// 列表栏布局（当前遮挡方式的校准结果）。
     var layout: ListColumnLayout = .default
+    /// 精准遮挡要露出的带区（微信主窗口坐标：原点在窗口外框左上角、y 向下）；整块遮挡时为空。
+    var revealedBands: [CGRect] = [] {
+        didSet {
+            if revealedBands != oldValue { render() }
+        }
+    }
+    /// 遮罩底部始终遮住的高度，露出的带区不会伸进来；精准遮挡时密码框放在这一条里，整块遮挡时为 0。
+    var reservedBottomHeight: CGFloat = 0 {
+        didSet {
+            if reservedBottomHeight != oldValue { render() }
+        }
+    }
+    /// 密码框的位置：整块遮挡时居中，精准遮挡时在底部条里。
+    var lockControlsPlacement: MaskView.LockControlsPlacement {
+        get { view.lockControlsPlacement }
+        set { view.lockControlsPlacement = newValue }
+    }
     /// 是否锁定：锁定时显示遮罩和密码框，解锁后收起。
     var isLocked = true {
         didSet {
@@ -86,6 +103,12 @@ final class MaskController {
         render()
     }
 
+    /// 放弃正在进行的校准，不保存；没有在校准时什么都不做。
+    /// 切换遮挡方式时调用：两种方式各有一套布局，草稿是按原来那一套开始的。
+    func cancelCalibration() {
+        endCalibration(save: false)
+    }
+
     private func dragCalibration(to cocoaFrame: NSRect) {
         guard mode == .calibrating, let snapshot else { return }
         let rect = GlobalCoordinates.flip(cocoaFrame, primaryScreenHeight: Self.primaryScreenHeight)
@@ -109,10 +132,15 @@ final class MaskController {
 
     private func render() {
         let calibrating = mode == .calibrating
+        // 带区按窗口坐标保存，这里加上窗口原点：窗口移动时露出的行直接跟着走，不用重新识别。
+        // 校准时遮罩是一整块半透明的框，不露出任何行
+        let origin = snapshot?.frame.origin ?? .zero
         let decision = MaskPlanner.decide(
             snapshot: isLocked || calibrating ? snapshot : nil,
             layout: calibrating ? calibrationDraft ?? layout : layout,
-            maskIsOnActiveSpace: panel.isOnActiveSpace)
+            maskIsOnActiveSpace: panel.isOnActiveSpace,
+            revealed: calibrating ? [] : revealedBands.map { $0.offsetBy(dx: origin.x, dy: origin.y) },
+            reservedBottomHeight: calibrating ? 0 : reservedBottomHeight)
         switch decision {
         case .show(let plan):
             show(plan, onAllSpaces: snapshot?.isOnAllSpaces == true)

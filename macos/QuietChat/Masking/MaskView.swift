@@ -1,6 +1,7 @@
 // 遮罩内容。
-// - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域）保持全透明，点击会穿透到那些窗口。
-//   密码框压到洞上时暂时隐藏，免得画到别的窗口上。密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；
+// - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域，以及精准遮挡露出的白名单行）保持全透明，
+//   点击会穿透到下面的窗口。密码框压到洞上时暂时隐藏，免得画到别的窗口上。
+//   密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；整块遮挡时它在中间，精准遮挡时在底部始终遮住的一条里；
 // - 校准模式：半透明蓝色，可拖动左、右、上三条边，中间是完成 / 恢复默认 / 取消按钮。
 // 视图坐标系翻转（原点在左上、y 向下），与 Quartz 方向一致，洞的坐标可以直接使用。
 
@@ -10,6 +11,14 @@ final class MaskView: NSView {
     enum Style {
         case mask
         case calibration
+    }
+
+    /// 密码框放在哪里。
+    enum LockControlsPlacement: Equatable {
+        /// 整块遮挡：垂直居中，上方有一行提示文字。
+        case centered
+        /// 精准遮挡：在底部高 `height` 的一条里垂直居中，这一条始终遮住；不画提示文字，中间留给露出的行。
+        case bottomStrip(height: CGFloat)
     }
 
     private enum Edge {
@@ -30,6 +39,14 @@ final class MaskView: NSView {
         didSet {
             guard holes != oldValue else { return }
             updateLockControlsVisibility()
+            needsDisplay = true
+        }
+    }
+
+    var lockControlsPlacement: LockControlsPlacement = .centered {
+        didSet {
+            guard lockControlsPlacement != oldValue else { return }
+            applyLockControlsPlacement()
             needsDisplay = true
         }
     }
@@ -63,6 +80,9 @@ final class MaskView: NSView {
     private let securePasswordField = FirstMouseSecureTextField()
     private let passwordVisibilityButton = FirstMouseButton()
     private let passwordError = NSTextField(labelWithString: "密码不对，再试一次")
+    // 密码框的两种纵向位置，同一时间只启用一个
+    private var centeredConstraint: NSLayoutConstraint?
+    private var bottomStripConstraint: NSLayoutConstraint?
     private let calibrationControls = NSStackView()
     private var dragEdge: Edge?
     private var dragStartMouse = NSPoint.zero
@@ -101,8 +121,10 @@ final class MaskView: NSView {
         case .mask:
             Self.maskColor.setFill()
             bounds.fill()
-            // 放在密码框（上边缘在垂直中线）正上方
-            drawCenteredText("聊天列表已隐藏", atY: bounds.midY - 32)
+            if lockControlsPlacement == .centered {
+                // 放在密码框（上边缘在垂直中线）正上方
+                drawCenteredText("聊天列表已隐藏", atY: bounds.midY - 32)
+            }
             // 最后清出洞，保证洞里连提示文字也不画
             NSColor.clear.setFill()
             for hole in holes {
@@ -238,10 +260,7 @@ final class MaskView: NSView {
         addSubview(lockControls)
 
         // 输入框的宽度约束引用了本视图，两端必须已在同一视图树中，所以放在 addSubview 之后激活
-        var constraints = [
-            lockControls.centerXAnchor.constraint(equalTo: centerXAnchor),
-            lockControls.topAnchor.constraint(equalTo: centerYAnchor),
-        ]
+        var constraints = [lockControls.centerXAnchor.constraint(equalTo: centerXAnchor)]
         for field in passwordFields {
             // 默认宽 160，遮罩太窄时随之收窄（给右侧按钮留出位置）
             let preferredWidth = field.widthAnchor.constraint(equalToConstant: 160)
@@ -249,7 +268,25 @@ final class MaskView: NSView {
             constraints += [preferredWidth, field.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -52)]
         }
         NSLayoutConstraint.activate(constraints)
+        centeredConstraint = lockControls.topAnchor.constraint(equalTo: centerYAnchor)
+        bottomStripConstraint = lockControls.centerYAnchor.constraint(equalTo: bottomAnchor)
+        applyLockControlsPlacement()
         applyPasswordVisibility()
+    }
+
+    /// 按 lockControlsPlacement 启用对应的纵向约束。
+    private func applyLockControlsPlacement() {
+        switch lockControlsPlacement {
+        case .centered:
+            bottomStripConstraint?.isActive = false
+            centeredConstraint?.isActive = true
+        case .bottomStrip(let height):
+            centeredConstraint?.isActive = false
+            // 密码框（连同错误提示）的中心落在底部条的中线上
+            bottomStripConstraint?.constant = -height / 2
+            bottomStripConstraint?.isActive = true
+        }
+        needsLayout = true
     }
 
     /// 按 hidesPasswordInput 切换显示哪个输入框；已输入的内容和正在输入的焦点跟着转过去。

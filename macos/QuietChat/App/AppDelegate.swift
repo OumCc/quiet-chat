@@ -1,6 +1,7 @@
 // 应用装配：加载配置、处理辅助功能授权、随微信进程启动/退出创建或销毁窗口跟踪器，
 // 在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」），
 // 并维护锁定状态：密码解锁、主窗口关闭时自动锁定（见「锁定与解锁」）。
+// 遮挡方式（整块 / 精准）只决定锁定时遮住哪里：精准遮挡下把 PreciseRevealController 给出的带区交给遮罩开洞（见「精准遮挡」）。
 
 import AppKit
 import QuietChatCore
@@ -13,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockState = LockState()
     private let permission = AccessibilityPermission()
     private let maskController = MaskController()
+    private let preciseReveal = PreciseRevealController()
+    private let whitelistEditor = WhitelistEditorController()
     private var statusMenu: StatusMenuController?
     private var refreshDriver: RefreshDriver?
     private var tracker: WeChatWindowTracker?
@@ -20,7 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         quitOtherInstances()
         config = loadConfig()
-        maskController.layout = config.listColumn
+        applyMaskMode()
+        preciseReveal.onChange = { [weak self] in
+            guard let self else { return }
+            self.maskController.revealedBands = self.preciseReveal.revealedBands
+        }
         maskController.onCalibrationFinished = { [weak self] layout in self?.saveListColumn(layout) }
         maskController.onUnlockAttempt = { [weak self] password in self?.attemptUnlock(with: password) ?? false }
         maskController.hidesPasswordInput = config.hidePasswordInput
@@ -107,6 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.notice("微信主窗口已关闭，自动锁定")
             applyLockState()
         }
+        // 先让精准遮挡按最新状态决定露出哪些行，再画遮罩：条件不满足时这一次刷新就会全部盖住
+        preciseReveal.update(
+            mode: config.maskMode, isLocked: lockState.isLocked, snapshot: snapshot, windowID: tracker?.mainWindowID,
+            layout: config.listColumnLayout(for: .precise), whitelist: config.whitelist)
+        maskController.revealedBands = preciseReveal.revealedBands
         maskController.update(snapshot: snapshot)
     }
 
@@ -120,12 +132,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lockState.unlock()
         Log.app.notice("已解锁")
         applyLockState()
+        refresh()
         return true
     }
 
+    /// 把锁定状态落实到遮罩和菜单栏图标。精准遮挡要不要读取画面由随后的 refresh() 决定。
     private func applyLockState() {
         maskController.isLocked = lockState.isLocked
         statusMenu?.updateIcon()
+        // 编辑白名单等于放开对应的聊天，锁定后不能继续；未保存的修改丢弃
+        if lockState.isLocked {
+            whitelistEditor.close()
+        }
+    }
+
+    // MARK: - 遮挡方式
+
+    /// 按当前遮挡方式设置遮罩：用哪一套布局、密码框放在哪里、底部留不留一条。
+    private func applyMaskMode() {
+        let isPrecise = config.maskMode == .precise
+        maskController.layout = config.listColumnLayout(for: config.maskMode)
+        maskController.reservedBottomHeight = isPrecise ? MaskPlanner.preciseReservedBottomHeight : 0
+        maskController.lockControlsPlacement =
+            isPrecise ? .bottomStrip(height: MaskPlanner.preciseReservedBottomHeight) : .centered
+    }
+
+    private func saveWhitelist(_ whitelist: [String]) {
+        config.whitelist = whitelist
+        do {
+            try configStore.save(config)
+            // 名称不写入日志
+            Log.app.notice("已保存白名单：\(whitelist.count) 个名称")
+        } catch {
+            Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
+        }
+        refresh()
     }
 
     // MARK: - 配置
@@ -140,11 +181,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 保存校准结果。两种遮挡方式各有一套布局，校准只改当前方式的那一套。
     private func saveListColumn(_ layout: ListColumnLayout) {
-        config.listColumn = layout
+        switch config.maskMode {
+        case .full:
+            config.listColumn = layout
+        case .precise:
+            config.preciseListColumn = layout
+        }
         do {
             try configStore.save(config)
-            Log.app.notice("已保存列表栏布局 left=\(layout.leftInset) top=\(layout.topInset) width=\(layout.width)")
+            Log.app.notice(
+                "已保存列表栏布局（\(self.config.maskMode.rawValue, privacy: .public)）left=\(layout.leftInset) top=\(layout.topInset) width=\(layout.width)")
         } catch {
             Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
         }
@@ -183,8 +231,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: StatusMenuDelegate {
     var statusDescription: String {
         guard permission.isGranted else { return "需要辅助功能权限" }
+        if needsScreenRecordingPermission { return "精准遮挡需要屏幕录制权限" }
         if maskController.mode == .calibrating { return "正在校准遮罩位置" }
         guard lockState.isLocked else { return "已解锁" }
+        if config.maskMode == .precise { return "已锁定 · 精准遮挡" }
         guard tracker != nil else { return "已锁定 · 微信未运行" }
         return maskController.isShowing ? "已锁定 · 在遮罩上输入密码解锁" : "已锁定 · 微信窗口未显示"
     }
@@ -195,6 +245,15 @@ extension AppDelegate: StatusMenuDelegate {
 
     var canCalibrate: Bool { maskController.canCalibrate }
 
+    var maskMode: MaskMode { config.maskMode }
+
+    var canEditWhitelist: Bool { config.maskMode == .precise && !lockState.isLocked }
+
+    /// 权限被收回、或系统要求重新确认时，系统查询可能仍然返回"已授权"，所以读取画面失败也算。
+    var needsScreenRecordingPermission: Bool {
+        config.maskMode == .precise && (!ScreenRecordingPermission.isGranted || preciseReveal.isCaptureFailing)
+    }
+
     /// 以系统登录项为准，不写入配置：用户也可能在「系统设置 → 通用 → 登录项」里直接增删，
     /// 菜单每次打开都重新读取，两边不会不一致。系统默认没有登记，即默认关闭。
     var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
@@ -204,10 +263,53 @@ extension AppDelegate: StatusMenuDelegate {
         permission.openSystemSettings()
     }
 
+    func requestScreenRecordingPermission() {
+        ScreenRecordingPermission.request()
+        ScreenRecordingPermission.openSystemSettings()
+        preciseReveal.recheckPermission()
+    }
+
     func lockNow() {
         lockState.lock()
         Log.app.notice("手动锁定")
         applyLockState()
+        refresh()
+    }
+
+    /// 锁定时也能切换：遮挡方式只决定遮住哪里，不改变锁定状态。
+    func selectMaskMode(_ mode: MaskMode) {
+        guard mode != config.maskMode else { return }
+        config.maskMode = mode
+        do {
+            try configStore.save(config)
+            Log.app.notice("遮挡方式：\(mode.rawValue, privacy: .public)")
+        } catch {
+            // 本次仍然生效，下次启动回到原来的方式
+            Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
+        }
+        maskController.cancelCalibration()
+        applyMaskMode()
+        switch mode {
+        case .precise:
+            // 屏幕录制权限只在这里申请；使用整块遮挡时从不申请
+            if !ScreenRecordingPermission.isGranted {
+                ScreenRecordingPermission.request()
+            }
+            preciseReveal.recheckPermission()
+            if config.whitelist.isEmpty {
+                editWhitelist()
+            }
+        case .full:
+            whitelistEditor.close()
+        }
+        refresh()
+    }
+
+    func editWhitelist() {
+        guard canEditWhitelist else { return }
+        whitelistEditor.show(whitelist: config.whitelist) { [weak self] whitelist in
+            self?.saveWhitelist(whitelist)
+        }
     }
 
     func changePassword() {

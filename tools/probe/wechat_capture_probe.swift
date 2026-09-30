@@ -9,7 +9,7 @@
 //     macos/QuietChatCore/Sources/QuietChatCore/ContentFingerprint.swift \
 //     macos/QuietChatCore/Sources/QuietChatCore/ListRowParser.swift
 //   /tmp/quietchat-capture-probe            第一轮：比较各种取图方式（流、按显示器、静帧）
-//   /tmp/quietchat-capture-probe --stills   第二轮：不开持续的流，定时取静帧，看有没有共享标记、开销多大
+//   /tmp/quietchat-capture-probe --stills   第二轮：定时取静帧（应用采用的方式）：有没有共享标记、开销、悬停与点击、文字框
 // 运行前请解锁或退出 QuietChat，让微信的聊天列表露出来；过程中按提示观察和操作。
 // 报告同时写到 /tmp/quietchat-capture-probe.txt（第二轮为 /tmp/quietchat-capture-probe-stills.txt）。
 // 加 --self-check 只检查脚本自身的计算，不截图。
@@ -118,8 +118,13 @@ struct Bitmap {
         return Double(sum) / Double(w * h * 3)
     }
 
-    var fingerprint: ContentFingerprint {
-        pixels.withUnsafeBytes { ContentFingerprint(bgra: $0, width: width, height: height, bytesPerRow: bytesPerRow) }
+    var fingerprint: ContentFingerprint { fingerprint(scale: 1) }
+
+    /// 与应用里的算法一致：原生分辨率的图直接按每 pt 的像素数计算，不先缩小。
+    func fingerprint(scale: Int) -> ContentFingerprint {
+        pixels.withUnsafeBytes {
+            ContentFingerprint(bgra: $0, width: width, height: height, bytesPerRow: bytesPerRow, scale: scale)
+        }
     }
 
     /// 每条（8 像素高）的底色亮度：把这一条横向分成 48 格，取各格平均亮度的中位数，与指纹的算法一致。
@@ -177,23 +182,6 @@ extension Bitmap {
         }
         guard drawn else { return nil }
         self.init(width: width, height: height, bytesPerRow: width * 4, pixels: pixels)
-    }
-
-    /// 每 2×2 个像素取平均，缩小到一半：把 2 倍分辨率的画面变成 1 倍。
-    func halved() -> Bitmap {
-        let w = width / 2, h = height / 2
-        var out = [UInt8](repeating: 255, count: w * h * 4)
-        for y in 0..<h {
-            let top = 2 * y * bytesPerRow, bottom = (2 * y + 1) * bytesPerRow
-            for x in 0..<w {
-                for channel in 0..<4 {
-                    let sum = Int(pixels[top + 8 * x + channel]) + Int(pixels[top + 8 * x + 4 + channel])
-                        + Int(pixels[bottom + 8 * x + channel]) + Int(pixels[bottom + 8 * x + 4 + channel])
-                    out[(y * w + x) * 4 + channel] = UInt8((sum + 2) / 4)
-                }
-            }
-        }
-        return Bitmap(width: w, height: h, bytesPerRow: w * 4, pixels: out)
     }
 }
 
@@ -378,10 +366,9 @@ final class ChangeLogger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         defer { previous = current }
-        guard let previous, previous.fingerprint.strips.count == current.fingerprint.strips.count else { return }
+        guard let previous, let differing = current.fingerprint.differingCellCounts(from: previous.fingerprint) else { return }
 
-        // 找出底色或位图有变化的条，合并成连续的区间
-        let differing = zip(previous.fingerprint.strips, current.fingerprint.strips).map { ($0 ^ $1).nonzeroBitCount }
+        // 找出底色或指纹有变化的条，合并成连续的区间
         let changed = differing.indices.filter {
             differing[$0] > 0 || abs(previous.backgrounds[$0] - current.backgrounds[$0]) > 3
         }
@@ -532,8 +519,7 @@ func captureStill(
 
 /// 两帧指纹相比，不同格数最多的那一条有几格不同；条数不同时返回 nil。
 func maxDifferingCells(_ lhs: ContentFingerprint, _ rhs: ContentFingerprint) -> Int? {
-    guard lhs.strips.count == rhs.strips.count else { return nil }
-    return zip(lhs.strips, rhs.strips).map { ($0 ^ $1).nonzeroBitCount }.max() ?? 0
+    lhs.differingCellCounts(from: rhs).map { $0.max() ?? 0 }
 }
 
 func statistics(_ values: [Double]) -> String {
@@ -547,7 +533,7 @@ func statistics(_ values: [Double]) -> String {
 
 /// 每隔 interval 秒取一张图，持续 seconds 秒；统计耗时，以及画面静止时相邻两张图的指纹差了多少。
 func poll(
-    seconds: Double, interval: Double = 0.1, prepare: (Bitmap) -> Bitmap = { $0 },
+    seconds: Double, interval: Double = 0.1, scale: Int = 1,
     capture: () async throws -> (bitmap: Bitmap, milliseconds: Double)
 ) async {
     var latencies: [Double] = [], processing: [Double] = [], differing: [Int] = []
@@ -559,9 +545,9 @@ func poll(
         let tick = Date()
         do {
             let still = try await capture()
-            // capture 返回的耗时只算取图；缩小和算指纹另计
+            // capture 返回的耗时只算取图；算指纹另计
             let processingStart = Date()
-            let fingerprint = prepare(still.bitmap).fingerprint
+            let fingerprint = still.bitmap.fingerprint(scale: scale)
             processing.append(Date().timeIntervalSince(processingStart) * 1000)
             latencies.append(still.milliseconds)
             if let previous {
@@ -578,35 +564,36 @@ func poll(
     let elapsed = Date().timeIntervalSince(start)
     report.line(String(format: "  取图 %d 次（%.1f 次/秒），失败 %d 次", latencies.count, Double(latencies.count) / elapsed, failures))
     report.line("  每次取图耗时（ms）：\(statistics(latencies))")
-    report.line("  每次处理耗时（缩小和算指纹，ms）：\(statistics(processing))")
+    report.line("  每次算指纹耗时（ms）：\(statistics(processing))")
     report.line("  相邻两张图：判为变化 \(flagged) 次；不同格数最多的一条：\(differing.max().map(String.init) ?? "无数据") 格"
         + "（各次：\(Dictionary(grouping: differing, by: { $0 }).sorted { $0.key < $1.key }.map { "\($0.key)格×\($0.value.count)" }.joined(separator: " "))）")
     report.line("  \(meter.summary())")
 }
 
-/// 定时取图时记录悬停、点击、滚动造成的变化；同时比较"直接取 1 倍图"和"取 2 倍图再缩小"两种做法。
+/// 定时取图时记录悬停、点击、滚动造成的变化；同时比较"取 1 倍图"和"取 2 倍图"两种做法（应用里用的是后者）。
 final class PollLogger {
     private struct State {
         var fingerprint: ContentFingerprint
         var backgrounds: [Double]
-        init(_ bitmap: Bitmap) {
-            fingerprint = bitmap.fingerprint
-            backgrounds = bitmap.stripBackgrounds
+        init(_ bitmap: Bitmap, scale: Int = 1) {
+            fingerprint = bitmap.fingerprint(scale: scale)
+            // 底色只从 1 倍图里读
+            backgrounds = scale == 1 ? bitmap.stripBackgrounds : []
         }
     }
 
     private var previousSmall: State?
-    private var previousAveraged: State?
+    private var previousLarge: State?
     private var printed = 0
 
-    func handle(time: Double, small: Bitmap, averaged: Bitmap?) {
-        let currentSmall = State(small), currentAveraged = averaged.map(State.init)
+    func handle(time: Double, small: Bitmap, large: Bitmap?) {
+        let currentSmall = State(small), currentLarge = large.map { State($0, scale: 2) }
         defer {
             previousSmall = currentSmall
-            previousAveraged = currentAveraged
+            previousLarge = currentLarge
         }
-        guard let previousSmall, previousSmall.fingerprint.strips.count == currentSmall.fingerprint.strips.count else { return }
-        let differing = zip(previousSmall.fingerprint.strips, currentSmall.fingerprint.strips).map { ($0 ^ $1).nonzeroBitCount }
+        guard let previousSmall,
+              let differing = currentSmall.fingerprint.differingCellCounts(from: previousSmall.fingerprint) else { return }
         let changed = differing.indices.filter {
             differing[$0] > 0 || abs(previousSmall.backgrounds[$0] - currentSmall.backgrounds[$0]) > 3
         }
@@ -628,8 +615,8 @@ final class PollLogger {
             String(format: "条%d–%d 底色%.0f→%.0f", range.lowerBound, range.upperBound,
                    previousSmall.backgrounds[range.lowerBound], currentSmall.backgrounds[range.lowerBound])
         }
-        report.line(String(format: "  t=%5.1fs 1倍[%@] 2倍缩小[%@]  %@%@", time,
-                           verdict(previousSmall, currentSmall), verdict(previousAveraged, currentAveraged),
+        report.line(String(format: "  t=%5.1fs 1倍[%@] 2倍[%@]  %@%@", time,
+                           verdict(previousSmall, currentSmall), verdict(previousLarge, currentLarge),
                            details.joined(separator: "；"), ranges.count > 4 ? " …共\(ranges.count)段" : ""))
     }
 }
@@ -656,10 +643,7 @@ func selfCheck() {
     precondition((crop.meanDifference(from: squeezed) ?? 0) > 20, "裁剪和缩小的整窗应当差别明显")
     precondition(window.hasOpaqueBorder, "全不透明的画面应当判为边缘不透明")
     precondition(crop.fingerprint.strips.count == 43 && crop.stripBackgrounds.count == 43, "条数不对")
-    let halved = window.halved()
-    precondition(halved.width == 300 && halved.height == 200, "缩小一半后的尺寸不对")
-    // 左上角 2×2 个像素的蓝色分量是 0、7、3、10，平均 5
-    precondition(halved.pixels[0] == 5, "2×2 取平均的结果不对")
+    precondition(window.fingerprint(scale: 2).strips.count == 25, "按 2 倍计算时每条应当是 16 像素高")
     precondition(parseCPUTime("53:02.69") == 3182.69 && parseCPUTime(" 1:02:03.5\n") == 3723.5, "CPU 时间换算不对")
     precondition(parseCPUTime("") == nil, "空字符串不应该换算出时间")
     precondition(maxDifferingCells(crop.fingerprint, crop.fingerprint) == 0, "同一帧的指纹应当没有差别")
@@ -941,10 +925,10 @@ enum CaptureProbe {
             report.line("  2 倍列表栏 \(cropLarge.bitmap.width)×\(cropLarge.bitmap.height)（期望 \(Int(scaledColumn.width))×\(Int(scaledColumn.height))），\(cropLarge.info)")
             compareCrop(cropLarge.bitmap, reference: fullLarge.bitmap, column: scaledColumn)
 
-            // 两种取法的指纹是否一致：2 倍图缩小后，和直接取的 1 倍图比较
-            let averaged = cropLarge.bitmap.halved().fingerprint
-            report.line("  2 倍图缩小后与 1 倍图的指纹：判为变化=\(averaged.differs(from: crop.bitmap.fingerprint) ? "是" : "否")，"
-                + "不同格数最多的一条 \(maxDifferingCells(averaged, crop.bitmap.fingerprint).map(String.init) ?? "条数不同") 格")
+            // 两种取法的指纹是否一致（应用里只用 2 倍图，不混用）
+            let large = cropLarge.bitmap.fingerprint(scale: 2)
+            report.line("  2 倍图与 1 倍图的指纹：判为变化=\(large.differs(from: crop.bitmap.fingerprint) ? "是" : "否")，"
+                + "不同格数最多的一条 \(maxDifferingCells(large, crop.bitmap.fingerprint).map(String.init) ?? "条数不同") 格")
 
             // 识别用的是图片接口，确认它同样按 sourceRect 裁剪
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: largeConfiguration())
@@ -972,10 +956,10 @@ enum CaptureProbe {
         }
 
         if scale == 2 {
-            await step("[H2] 每 0.1 秒取一张 2 倍图（缩小后算指纹），持续 10 秒") {
+            await step("[H2] 每 0.1 秒取一张 2 倍图，持续 10 秒") {
                 print(watchHint)
                 await sleep(seconds: 2)
-                await poll(seconds: 10, prepare: { $0.halved() }) {
+                await poll(seconds: 10, scale: 2) {
                     let still = try await captureStill(filter: filter, configuration: largeConfiguration())
                     return (still.bitmap, still.milliseconds)
                 }
@@ -998,8 +982,7 @@ enum CaptureProbe {
                     if let small = try? await captureStill(filter: filter, configuration: smallConfiguration()) {
                         let large = scale == 2
                             ? try? await captureStill(filter: filter, configuration: largeConfiguration()) : nil
-                        logger.handle(
-                            time: Date().timeIntervalSince(start), small: small.bitmap, averaged: large?.bitmap.halved())
+                        logger.handle(time: Date().timeIntervalSince(start), small: small.bitmap, large: large?.bitmap)
                     }
                     let remaining = 0.1 - Date().timeIntervalSince(tick)
                     if remaining > 0 { await sleep(seconds: remaining) }
@@ -1008,6 +991,11 @@ enum CaptureProbe {
             _ = report.ask("  做完后按回车。")
             polling.cancel()
             await polling.value
+        }
+
+        await step("[J] 列表栏的文字框（只有位置、字数和末尾的标点，没有文字内容）") {
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: largeConfiguration())
+            try describeText(in: image, scale: CGFloat(image.width) / column.width, columnWidth: column.width)
         }
     }
 }

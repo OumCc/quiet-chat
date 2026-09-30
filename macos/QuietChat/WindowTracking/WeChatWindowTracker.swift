@@ -25,7 +25,8 @@ final class WeChatWindowTracker {
     private var observer: AXObserver?
     private var applicationNotificationsRegistered = false
     private var mainWindow: AXUIElement?
-    private var mainWindowID: CGWindowID?
+    /// 主窗口在窗口服务器里的编号；还没有识别到主窗口时为 nil。精准遮挡读取画面时用它找到窗口。
+    private(set) var mainWindowID: CGWindowID?
     private var lastResolveAttempt = Date.distantPast
     private var lastPresence: WindowPresence?
 

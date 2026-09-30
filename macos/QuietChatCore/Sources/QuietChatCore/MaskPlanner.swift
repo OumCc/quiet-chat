@@ -34,6 +34,9 @@ public enum MaskDecision: Equatable, Sendable {
 
 /// 遮罩的几何计算与显示规则。
 public enum MaskPlanner {
+    /// 精准遮挡时遮罩底部始终遮住的高度：密码框放在这一条里，露出的白名单行不会伸进来。
+    public static let preciseReservedBottomHeight: CGFloat = 56
+
     /// 计算遮罩的位置和洞；列表栏与窗口没有交集时返回 nil。遮罩和洞都落在整点上。
     /// - Parameters:
     ///   - revealed: 要露出的带区（Quartz 全局坐标），精准遮挡下为识别出的白名单行；整块遮挡时为空。
