@@ -33,6 +33,27 @@ enum WindowServer {
         }
     }
 
+    /// 窗口服务器中的一条窗口记录，仅用于诊断日志。
+    struct WindowEntry: Equatable, CustomStringConvertible {
+        var id: CGWindowID
+        var layer: Int
+        var alpha: Double
+        var frame: CGRect
+
+        var description: String { "id=\(id) layer=\(layer) alpha=\(alpha) frame=\(frame)" }
+    }
+
+    /// 压在指定窗口之上、属于指定进程的在屏窗口（不限层级），从前到后排列。仅用于诊断日志。
+    static func windows(above windowID: CGWindowID, ownedBy pid: pid_t) -> [WindowEntry] {
+        windowList([.optionOnScreenAboveWindow, .excludeDesktopElements], relativeTo: windowID).compactMap { entry in
+            guard (entry[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  let id = number(of: entry), let frame = bounds(of: entry) else { return nil }
+            return WindowEntry(
+                id: id, layer: (entry[kCGWindowLayer as String] as? Int) ?? 0,
+                alpha: (entry[kCGWindowAlpha as String] as? Double) ?? 0, frame: frame)
+        }
+    }
+
     /// 窗口同时属于几个桌面；私有接口不可用时返回 nil。
     /// 被分配到"所有桌面"的窗口属于每一个桌面，数量大于 1。
     static func spaceCount(of windowID: CGWindowID) -> Int? {

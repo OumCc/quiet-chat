@@ -28,6 +28,9 @@ final class WeChatWindowTracker {
     private var mainWindowID: CGWindowID?
     private var lastResolveAttempt = Date.distantPast
     private var lastPresence: WindowPresence?
+    // 诊断日志（定位微信弹窗被遮罩盖住的问题）：记下上次输出的内容，只在变化时再记
+    private var lastLoggedWindowsAbove: [WindowServer.WindowEntry]?
+    private var lastLoggedAXWindows: String?
 
     init(pid: pid_t) {
         self.pid = pid
@@ -82,9 +85,11 @@ final class WeChatWindowTracker {
             let presence = WindowPresence.classify(
                 isOnScreen: false, isExplicitlyHidden: isExplicitlyHidden, spaceCount: spaceCount)
             logPresenceChange(presence, spaceCount: spaceCount)
+            lastLoggedWindowsAbove = nil
             return WindowSnapshot(frame: info.frame, presence: presence)
         }
         logPresenceChange(.visible, spaceCount: spaceCount)
+        logWeChatWindowsAbove(windowID, mainFrame: info.frame)
         let occluders = WindowServer.occluders(
             above: windowID, excludingPIDs: [pid, ProcessInfo.processInfo.processIdentifier])
         return WindowSnapshot(
@@ -99,6 +104,39 @@ final class WeChatWindowTracker {
             "主窗口状态：\(String(describing: presence), privacy: .public)，所属桌面数=\(spaceCount.map(String.init) ?? "未知", privacy: .public)")
     }
 
+    // 诊断：压在主窗口之上、正在显示的微信自身窗口（不限层级）。
+    // 只比较这些窗口本身，不比较主窗口外框，拖动主窗口时不会逐帧刷日志
+    private func logWeChatWindowsAbove(_ windowID: CGWindowID, mainFrame: CGRect) {
+        let windows = WindowServer.windows(above: windowID, ownedBy: pid)
+        guard windows != lastLoggedWindowsAbove else { return }
+        lastLoggedWindowsAbove = windows
+        let list = windows.map(String.init(describing:)).joined(separator: "; ")
+        Log.tracking.notice(
+            "[诊断] 主窗口 id=\(windowID) frame=\(String(describing: mainFrame), privacy: .public) 之上的微信窗口 \(windows.count) 个：\(list, privacy: .public)")
+    }
+
+    // 诊断：微信的全部辅助功能窗口及主窗口挑选结果，只在变化时记录。
+    // 标题可能包含聊天名称，只记是否为主窗口标题
+    private func logAXWindows(_ windows: [AXUIElement], candidates: [WindowCandidate], selected: Int?) {
+        let lines = zip(windows, candidates).enumerated().map { index, pair in
+            let (window, candidate) = pair
+            let title: String
+            if let text = candidate.title, !text.isEmpty {
+                title = MainWindowSelector.mainWindowTitles.contains(text) ? "主窗口标题" : "其他标题"
+            } else {
+                title = "无标题"
+            }
+            return "[\(index)] id=\(window.windowID.map(String.init) ?? "nil")"
+                + " role=\(window.string(kAXRoleAttribute) ?? "nil") subrole=\(candidate.subrole ?? "nil")"
+                + " frame=\(window.frame.map { String(describing: $0) } ?? "nil")"
+                + " modal=\(window.bool(kAXModalAttribute).map(String.init) ?? "nil") \(title)"
+        }
+        let summary = lines.joined(separator: "; ") + " 选中=\(selected.map(String.init) ?? "无")"
+        guard summary != lastLoggedAXWindows else { return }
+        lastLoggedAXWindows = summary
+        Log.tracking.notice("[诊断] 微信辅助功能窗口 \(windows.count) 个：\(summary, privacy: .public)")
+    }
+
     /// 最小化或微信被隐藏：可以确定主窗口不在任何桌面上显示。
     private var isExplicitlyHidden: Bool {
         if NSRunningApplication(processIdentifier: pid)?.isHidden == true { return true }
@@ -106,6 +144,10 @@ final class WeChatWindowTracker {
     }
 
     private func handle(notification: String, element: AXUIElement) {
+        // 诊断：事件对应的窗口。回调给的元素是新引用，没有设置过超时；已销毁的元素读不到属性，记为 nil
+        AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
+        Log.tracking.notice(
+            "[诊断] 事件 \(notification, privacy: .public) id=\(element.windowID.map(String.init) ?? "nil", privacy: .public) subrole=\(element.string(kAXSubroleAttribute) ?? "nil", privacy: .public)")
         switch notification {
         case kAXUIElementDestroyedNotification:
             if let mainWindow, CFEqual(mainWindow, element) {
@@ -132,8 +174,10 @@ final class WeChatWindowTracker {
         let candidates = windows.map {
             WindowCandidate(title: $0.string(kAXTitleAttribute), subrole: $0.string(kAXSubroleAttribute), size: $0.size ?? .zero)
         }
+        let selected = MainWindowSelector.selectMainWindow(from: candidates)
+        logAXWindows(windows, candidates: candidates, selected: selected)
         // 找不到时保留原主窗口：主窗口被关闭后可能暂时不在辅助功能列表里，但窗口服务器仍能查到它
-        guard let index = MainWindowSelector.selectMainWindow(from: candidates) else { return }
+        guard let index = selected else { return }
         let window = windows[index]
         if let mainWindow, CFEqual(mainWindow, window) {
             if mainWindowID == nil { mainWindowID = windowID(of: window) }
@@ -159,6 +203,7 @@ final class WeChatWindowTracker {
         }
         mainWindow = nil
         mainWindowID = nil
+        lastLoggedWindowsAbove = nil
     }
 
     private func windowID(of window: AXUIElement) -> CGWindowID? {
