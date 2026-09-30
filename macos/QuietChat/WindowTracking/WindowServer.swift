@@ -21,8 +21,9 @@ enum WindowServer {
 
     /// 压在指定窗口之上、会挡住它的窗口外框（Quartz 全局坐标）。
     ///
-    /// 只统计普通层级（layer 0）且可见的窗口；`excludedPIDs` 中进程的窗口不计入。
-    /// 调用方会排除本应用和微信自身：微信有不少不可见的辅助窗口，把它们当成遮挡会在遮罩上误开洞。
+    /// 只统计普通层级（layer 0）且可见的窗口；`excludedPIDs` 中进程的窗口不计入，调用方用它排除本应用。
+    /// 微信自己的窗口也计入：转发等弹窗是压在主窗口之上的 layer 0 独立窗口，不算遮挡就会被遮罩盖住。
+    /// 微信的辅助窗口（提示框、条状窗口等）在主窗口显示时都不在屏，不会被统计进来。
     static func occluders(above windowID: CGWindowID, excludingPIDs excludedPIDs: Set<pid_t>) -> [CGRect] {
         windowList([.optionOnScreenAboveWindow, .excludeDesktopElements], relativeTo: windowID).compactMap { entry in
             guard (entry[kCGWindowLayer as String] as? Int) == 0,
@@ -30,27 +31,6 @@ enum WindowServer {
                   ((entry[kCGWindowAlpha as String] as? Double) ?? 0) > 0,
                   let frame = bounds(of: entry), frame.width > 1, frame.height > 1 else { return nil }
             return frame
-        }
-    }
-
-    /// 窗口服务器中的一条窗口记录，仅用于诊断日志。
-    struct WindowEntry: Equatable, CustomStringConvertible {
-        var id: CGWindowID
-        var layer: Int
-        var alpha: Double
-        var frame: CGRect
-
-        var description: String { "id=\(id) layer=\(layer) alpha=\(alpha) frame=\(frame)" }
-    }
-
-    /// 压在指定窗口之上、属于指定进程的在屏窗口（不限层级），从前到后排列。仅用于诊断日志。
-    static func windows(above windowID: CGWindowID, ownedBy pid: pid_t) -> [WindowEntry] {
-        windowList([.optionOnScreenAboveWindow, .excludeDesktopElements], relativeTo: windowID).compactMap { entry in
-            guard (entry[kCGWindowOwnerPID as String] as? pid_t) == pid,
-                  let id = number(of: entry), let frame = bounds(of: entry) else { return nil }
-            return WindowEntry(
-                id: id, layer: (entry[kCGWindowLayer as String] as? Int) ?? 0,
-                alpha: (entry[kCGWindowAlpha as String] as? Double) ?? 0, frame: frame)
         }
     }
 
