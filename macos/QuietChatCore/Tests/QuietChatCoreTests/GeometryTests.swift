@@ -117,6 +117,86 @@ struct MaskPlannerTests {
     }
 }
 
+/// 精准遮挡：露出的白名单行和底部保留条。
+struct MaskPlannerRevealTests {
+    let window = CGRect(x: 100, y: 50, width: 1000, height: 800)
+    let layout = ListColumnLayout(leftInset: 60, topInset: 0, width: 242)
+    let maskRect = CGRect(x: 160, y: 50, width: 242, height: 800)
+
+    @Test func defaultArgumentsKeepFullMaskBehaviour() {
+        let occluder = CGRect(x: 300, y: 100, width: 500, height: 200)
+        let plain = MaskPlanner.plan(windowFrame: window, layout: layout, occluders: [occluder])
+        let explicit = MaskPlanner.plan(
+            windowFrame: window, layout: layout, occluders: [occluder], revealed: [], reservedBottomHeight: 0)
+        #expect(plain == explicit)
+        #expect(plain == MaskPlan(maskRect: maskRect, holes: [CGRect(x: 300, y: 100, width: 102, height: 200)]))
+    }
+
+    @Test func revealedBandBecomesHoleClippedToMask() throws {
+        // 带区比遮罩宽、纵向带小数：裁到遮罩内，并向外取整到整点
+        let band = CGRect(x: 100, y: 115.5, width: 1000, height: 60)
+        let plan = try #require(MaskPlanner.plan(windowFrame: window, layout: layout, occluders: [], revealed: [band]))
+        #expect(plan.maskRect == maskRect)
+        #expect(plan.holes == [CGRect(x: 160, y: 115, width: 242, height: 61)])
+        #expect(plan.holesInMaskCoordinates == [CGRect(x: 0, y: 65, width: 242, height: 61)])
+    }
+
+    @Test func bandAboveMaskIsClippedOrIgnored() throws {
+        let lowered = ListColumnLayout(leftInset: 60, topInset: 100, width: 242)
+        let above = CGRect(x: 160, y: 60, width: 242, height: 60)
+        let straddling = CGRect(x: 160, y: 120, width: 242, height: 60)
+        let plan = try #require(
+            MaskPlanner.plan(windowFrame: window, layout: lowered, occluders: [], revealed: [above, straddling]))
+        #expect(plan.holes == [CGRect(x: 160, y: 150, width: 242, height: 30)])
+    }
+
+    /// 底部保留条里放密码框：白名单行落在这里的部分保持遮住。
+    @Test func reservedBottomStripIsNeverRevealed() throws {
+        // 保留条为 y 794–850
+        let straddling = CGRect(x: 160, y: 760, width: 242, height: 60)
+        let inside = CGRect(x: 160, y: 800, width: 242, height: 40)
+        let plan = try #require(MaskPlanner.plan(
+            windowFrame: window, layout: layout, occluders: [], revealed: [straddling, inside], reservedBottomHeight: 56))
+        #expect(plan.holes == [CGRect(x: 160, y: 760, width: 242, height: 34)])
+    }
+
+    @Test func occludersStillOpenHolesInReservedStrip() throws {
+        let occluder = CGRect(x: 200, y: 780, width: 400, height: 300)
+        let plan = try #require(MaskPlanner.plan(
+            windowFrame: window, layout: layout, occluders: [occluder], reservedBottomHeight: 56))
+        #expect(plan.holes == [CGRect(x: 200, y: 780, width: 202, height: 70)])
+    }
+
+    @Test func occluderAndRevealedHolesAreCombined() throws {
+        let occluder = CGRect(x: 300, y: 100, width: 500, height: 200)
+        let band = CGRect(x: 160, y: 400, width: 242, height: 60)
+        let plan = try #require(MaskPlanner.plan(
+            windowFrame: window, layout: layout, occluders: [occluder], revealed: [band], reservedBottomHeight: 56))
+        #expect(plan.holes == [CGRect(x: 300, y: 100, width: 102, height: 200), band])
+    }
+
+    @Test func maskShorterThanReservedStripRevealsNothing() throws {
+        let short = CGRect(x: 100, y: 50, width: 1000, height: 40)
+        let band = CGRect(x: 160, y: 50, width: 242, height: 40)
+        let plan = try #require(MaskPlanner.plan(
+            windowFrame: short, layout: layout, occluders: [], revealed: [band], reservedBottomHeight: 56))
+        #expect(plan.holes.isEmpty)
+    }
+
+    @Test func decisionPassesRevealedBandsAndReservedStripThrough() {
+        let snapshot = WindowSnapshot(frame: window, presence: .visible)
+        let bands = [CGRect(x: 160, y: 400, width: 242, height: 60), CGRect(x: 160, y: 780, width: 242, height: 60)]
+        let decision = MaskPlanner.decide(
+            snapshot: snapshot, layout: layout, maskIsOnActiveSpace: true, revealed: bands, reservedBottomHeight: 56)
+        #expect(decision == .show(MaskPlan(
+            maskRect: maskRect, holes: [bands[0], CGRect(x: 160, y: 780, width: 242, height: 14)])))
+        // 窗口不可见时，带区不改变收起 / 保持的规则
+        let elsewhere = WindowSnapshot(frame: window, presence: .onOtherSpace)
+        #expect(MaskPlanner.decide(snapshot: elsewhere, layout: layout, maskIsOnActiveSpace: false, revealed: bands) == .keep)
+        #expect(MaskPlanner.decide(snapshot: nil, layout: layout, maskIsOnActiveSpace: true, revealed: bands) == .hide)
+    }
+}
+
 struct WindowPresenceTests {
     @Test func onScreenWindowIsVisible() {
         #expect(WindowPresence.classify(isOnScreen: true, isExplicitlyHidden: false, spaceCount: 1) == .visible)

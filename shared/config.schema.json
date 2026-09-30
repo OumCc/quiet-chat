@@ -11,7 +11,45 @@
       "default": 1
     },
     "listColumn": {
-      "description": "聊天列表栏在微信主窗口内的位置，由用户校准得到。列表栏总是向下延伸到窗口底边。",
+      "description": "整块遮挡下，聊天列表栏在微信主窗口内的位置，由用户校准得到。列表栏总是向下延伸到窗口底边。",
+      "type": "object",
+      "properties": {
+        "leftInset": {
+          "description": "列表栏左边缘到窗口左边缘的距离。",
+          "type": "number",
+          "minimum": 0,
+          "default": 64
+        },
+        "topInset": {
+          "description": "列表栏上边缘到窗口上边缘的距离。",
+          "type": "number",
+          "minimum": 0,
+          "default": 0
+        },
+        "width": {
+          "description": "列表栏宽度。",
+          "type": "number",
+          "minimum": 0,
+          "default": 280
+        }
+      }
+    },
+    "maskMode": {
+      "description": "锁定时的遮挡方式：full 整块遮住聊天列表栏；precise 只露出白名单聊天所在的行。读取时遇到未知取值按 full 处理。",
+      "type": "string",
+      "enum": ["full", "precise"],
+      "default": "full"
+    },
+    "whitelist": {
+      "description": "精准遮挡要露出的聊天名称，与聊天列表里显示的一致（有备注就填备注）。保存前去掉每项首尾的空白，并丢弃空项和重复项。只在 maskMode 为 precise 时起作用。",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "preciseListColumn": {
+      "description": "精准遮挡下聊天列表栏的位置，结构同 listColumn，在精准遮挡下校准后才写入。缺失表示还没有校准过：沿用 listColumn 的 leftInset 和 width，topInset 取 0。",
       "type": "object",
       "properties": {
         "leftInset": {

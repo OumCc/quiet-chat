@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000014 /* QuietChatCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000013 /* QuietChatCore */; };
+		A10000000000000000000017 /* QuietChatDetection in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000016 /* QuietChatDetection */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000014 /* QuietChatCore in Frameworks */,
+				A10000000000000000000017 /* QuietChatDetection in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -83,6 +85,7 @@
 			name = QuietChat;
 			packageProductDependencies = (
 				A10000000000000000000013 /* QuietChatCore */,
+				A10000000000000000000016 /* QuietChatDetection */,
 			);
 			productName = QuietChat;
 			productReference = A10000000000000000000004 /* QuietChat.app */;
@@ -275,6 +278,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000012 /* XCLocalSwiftPackageReference "QuietChatCore" */;
 			productName = QuietChatCore;
+		};
+		A10000000000000000000016 /* QuietChatDetection */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000012 /* XCLocalSwiftPackageReference "QuietChatCore" */;
+			productName = QuietChatDetection;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

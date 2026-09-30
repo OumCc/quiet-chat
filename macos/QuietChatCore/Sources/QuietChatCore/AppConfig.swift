@@ -4,14 +4,33 @@
 
 import Foundation
 
+/// 锁定时的遮挡方式。只决定遮住哪里，解锁、自动锁定等规则在两种方式下相同。
+public enum MaskMode: String, Codable, Sendable {
+    /// 整块遮住聊天列表栏。
+    case full
+    /// 只露出白名单聊天所在的行，其余照旧遮住。
+    case precise
+
+    // 未知取值（例如更新的版本写出的新方式）按整块遮挡处理：宁可多遮
+    public init(from decoder: any Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .full
+    }
+}
+
 /// QuietChat 的持久化配置。
 public struct AppConfig: Codable, Equatable, Sendable {
     /// 当前配置格式版本；只有不兼容的格式变化才递增。
     public static let currentSchemaVersion = 1
 
     public var schemaVersion: Int
-    /// 聊天列表栏的位置（校准结果）。
+    /// 整块遮挡下聊天列表栏的位置（校准结果）。
     public var listColumn: ListColumnLayout
+    /// 遮挡方式；默认整块遮挡。
+    public var maskMode: MaskMode
+    /// 精准遮挡要露出的聊天名称，保存前由 `ChatWhitelist.normalized` 整理；只在精准遮挡下起作用。
+    public var whitelist: [String]
+    /// 精准遮挡下聊天列表栏的位置（校准结果）；nil 表示还没有在精准遮挡下校准过，见 `listColumnLayout(for:)`。
+    public var preciseListColumn: ListColumnLayout?
     /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
     public var password: PasswordRecord?
     /// 遮罩上的密码框是否隐藏输入内容；默认明文显示，记住用户最后一次的选择。
@@ -19,10 +38,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
+        maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
         password: PasswordRecord? = nil, hidePasswordInput: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
+        self.maskMode = maskMode
+        self.whitelist = whitelist
+        self.preciseListColumn = preciseListColumn
         self.password = password
         self.hidePasswordInput = hidePasswordInput
     }
@@ -33,8 +56,24 @@ public struct AppConfig: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         listColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .listColumn) ?? .default
+        maskMode = try container.decodeIfPresent(MaskMode.self, forKey: .maskMode) ?? .full
+        whitelist = try container.decodeIfPresent([String].self, forKey: .whitelist) ?? []
+        preciseListColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .preciseListColumn)
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
+    }
+
+    /// 指定遮挡方式使用的列表栏布局。
+    ///
+    /// 精准遮挡还没有校准过时，沿用整块遮挡的左边距和宽度，上边距取 0：
+    /// 整块遮挡的上边距可能被用来露出顶部的聊天，精准遮挡照搬的话会露出没有识别过的行。
+    public func listColumnLayout(for mode: MaskMode) -> ListColumnLayout {
+        switch mode {
+        case .full:
+            listColumn
+        case .precise:
+            preciseListColumn ?? ListColumnLayout(leftInset: listColumn.leftInset, topInset: 0, width: listColumn.width)
+        }
     }
 }
 
