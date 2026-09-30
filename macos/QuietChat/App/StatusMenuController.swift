@@ -1,5 +1,5 @@
-// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准和退出。
-// 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码和校准需要先解锁，恢复默认密码不受锁定限制。
+// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、开机自启动和退出。
+// 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码和校准需要先解锁，恢复默认密码和开机自启动不受锁定限制。
 
 import AppKit
 
@@ -10,11 +10,13 @@ protocol StatusMenuDelegate: AnyObject {
     var needsAccessibilityPermission: Bool { get }
     var isLocked: Bool { get }
     var canCalibrate: Bool { get }
+    var launchesAtLogin: Bool { get }
     func requestAccessibilityPermission()
     func lockNow()
     func changePassword()
     func resetPassword()
     func beginCalibration()
+    func toggleLaunchAtLogin()
 }
 
 @MainActor
@@ -67,6 +69,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        let launchAtLogin = makeItem("开机自启动", #selector(toggleLaunchAtLogin))
+        launchAtLogin.state = delegate.launchesAtLogin ? .on : .off
+        menu.addItem(launchAtLogin)
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 QuietChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
@@ -87,4 +94,5 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func changePassword() { delegate?.changePassword() }
     @objc private func resetPassword() { delegate?.resetPassword() }
     @objc private func beginCalibration() { delegate?.beginCalibration() }
+    @objc private func toggleLaunchAtLogin() { delegate?.toggleLaunchAtLogin() }
 }

@@ -109,6 +109,12 @@ quiet-chat/
 - 点击后：激活微信 → ⌘F → 粘贴名称 → 回车。执行前保存剪贴板，结束后恢复。
 - 已确认：⌘F 搜索「文件传输助手」后回车，会直接打开这个聊天。群聊名称在 M3 实测。
 
+### 6.7 开机自启动
+
+- 菜单「开机自启动」勾选后，登录系统时自动启动 QuietChat；默认关闭。锁定时也能切换。
+- 开关状态以系统登录项为准，不写入配置文件：用户也可以在系统设置里直接增删登录项，菜单每次打开都重新读取。macOS 用 `SMAppService.mainApp`。
+- 系统要求用户在设置里另行允许，或登记失败时，弹窗说明并提供跳转到「系统设置 → 通用 → 登录项」的入口。
+
 ## 7. 配置
 
 - **位置**：macOS 为 `~/Library/Application Support/QuietChat/config.json`；Windows 为 `%APPDATA%\QuietChat\config.json`。

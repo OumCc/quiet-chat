@@ -4,6 +4,7 @@
 
 import AppKit
 import QuietChatCore
+import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -194,6 +195,10 @@ extension AppDelegate: StatusMenuDelegate {
 
     var canCalibrate: Bool { maskController.canCalibrate }
 
+    /// 以系统登录项为准，不写入配置：用户也可能在「系统设置 → 通用 → 登录项」里直接增删，
+    /// 菜单每次打开都重新读取，两边不会不一致。系统默认没有登记，即默认关闭。
+    var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
+
     func requestAccessibilityPermission() {
         permission.request()
         permission.openSystemSettings()
@@ -232,5 +237,40 @@ extension AppDelegate: StatusMenuDelegate {
 
     func beginCalibration() {
         maskController.beginCalibration()
+    }
+
+    func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        let enable = service.status != .enabled
+        do {
+            if enable {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+            Log.app.notice("开机自启动：\(enable ? "开启" : "关闭", privacy: .public)")
+        } catch {
+            Log.app.error("开机自启动设置失败：\(error.localizedDescription, privacy: .public)")
+            showLoginItemsAlert("开机自启动没有设置成功", detail: error.localizedDescription)
+            return
+        }
+        // 用户在系统设置里关掉过本应用时，登记成功后仍要用户到设置里重新允许
+        if service.status == .requiresApproval {
+            showLoginItemsAlert("需要在系统设置里允许 QuietChat 开机自启动")
+        }
+    }
+
+    /// 开机自启动需要用户处理时提示，并提供跳到「登录项」设置页的入口。
+    private func showLoginItemsAlert(_ message: String, detail: String? = nil) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = [detail, "可以在「系统设置 → 通用 → 登录项」里查看和修改。"]
+            .compactMap { $0 }.joined(separator: "\n")
+        alert.addButton(withTitle: "打开登录项设置")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn {
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 }
