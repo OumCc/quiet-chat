@@ -2,7 +2,7 @@
 // - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域，以及精准遮挡露出的白名单行）保持全透明，
 //   点击会穿透到下面的窗口。密码框压到洞上时暂时隐藏，免得画到别的窗口上。
 //   密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；整块遮挡时它在中间，精准遮挡时在底部始终遮住的一条里；
-// - 校准模式：半透明蓝色，可拖动左、右、上三条边，中间是完成 / 恢复默认 / 取消按钮。
+// - 校准模式：半透明蓝色，可拖动左、右、上三条边；中间的不透明卡片承载提示和完成 / 恢复默认 / 取消按钮。
 // 视图坐标系翻转（原点在左上、y 向下），与 Quartz 方向一致，洞的坐标可以直接使用。
 
 import AppKit
@@ -28,7 +28,7 @@ final class MaskView: NSView {
     var style: Style = .mask {
         didSet {
             guard style != oldValue else { return }
-            calibrationControls.isHidden = style != .calibration
+            calibrationCard.isHidden = style != .calibration
             updateLockControlsVisibility()
             needsDisplay = true
         }
@@ -83,6 +83,7 @@ final class MaskView: NSView {
     // 密码框的两种纵向位置，同一时间只启用一个
     private var centeredConstraint: NSLayoutConstraint?
     private var bottomStripConstraint: NSLayoutConstraint?
+    private let calibrationCard = NSBox()
     private let calibrationControls = NSStackView()
     private var dragEdge: Edge?
     private var dragStartMouse = NSPoint.zero
@@ -107,6 +108,10 @@ final class MaskView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
+        calibrationCard.needsDisplay = true
+        for view in calibrationControls.arrangedSubviews {
+            view.needsDisplay = true
+        }
     }
 
     override func layout() {
@@ -334,11 +339,13 @@ final class MaskView: NSView {
     private func setUpCalibrationControls() {
         let hint = NSTextField(wrappingLabelWithString: "拖动左、右、上三条边，\n对齐微信的聊天列表")
         hint.alignment = .center
-        hint.font = .systemFont(ofSize: 12)
+        hint.font = .systemFont(ofSize: 13, weight: .medium)
+        hint.textColor = CalibrationColors.text
+        hint.widthAnchor.constraint(equalToConstant: 160).isActive = true
 
-        let done = FirstMouseButton(title: "完成", target: self, action: #selector(finish))
-        let reset = FirstMouseButton(title: "恢复默认", target: self, action: #selector(reset))
-        let cancel = FirstMouseButton(title: "取消", target: self, action: #selector(cancel))
+        let done = CalibrationButton(title: "完成", target: self, action: #selector(finish), isPrimary: true)
+        let reset = CalibrationButton(title: "恢复默认", target: self, action: #selector(reset))
+        let cancel = CalibrationButton(title: "取消", target: self, action: #selector(cancel))
 
         calibrationControls.orientation = .vertical
         calibrationControls.spacing = 8
@@ -347,17 +354,124 @@ final class MaskView: NSView {
         }
         calibrationControls.setCustomSpacing(14, after: hint)
         calibrationControls.translatesAutoresizingMaskIntoConstraints = false
-        calibrationControls.isHidden = true
-        addSubview(calibrationControls)
+
+        calibrationCard.boxType = .custom
+        calibrationCard.titlePosition = .noTitle
+        calibrationCard.cornerRadius = 12
+        calibrationCard.borderWidth = 1
+        calibrationCard.borderColor = CalibrationColors.cardBorder
+        calibrationCard.fillColor = CalibrationColors.cardBackground
+        calibrationCard.contentViewMargins = .zero
+        calibrationCard.translatesAutoresizingMaskIntoConstraints = false
+        calibrationCard.isHidden = true
+        addSubview(calibrationCard)
+        calibrationCard.addSubview(calibrationControls)
+
         NSLayoutConstraint.activate([
-            calibrationControls.centerXAnchor.constraint(equalTo: centerXAnchor),
-            calibrationControls.centerYAnchor.constraint(equalTo: centerYAnchor),
+            calibrationCard.centerXAnchor.constraint(equalTo: centerXAnchor),
+            calibrationCard.centerYAnchor.constraint(equalTo: centerYAnchor),
+            calibrationControls.leadingAnchor.constraint(equalTo: calibrationCard.leadingAnchor, constant: 16),
+            calibrationControls.trailingAnchor.constraint(equalTo: calibrationCard.trailingAnchor, constant: -16),
+            calibrationControls.topAnchor.constraint(equalTo: calibrationCard.topAnchor, constant: 16),
+            calibrationControls.bottomAnchor.constraint(equalTo: calibrationCard.bottomAnchor, constant: -16),
         ])
+        for button in [done, reset, cancel] {
+            button.widthAnchor.constraint(equalTo: hint.widthAnchor).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        }
     }
 
     @objc private func finish() { onFinishCalibration?() }
     @objc private func reset() { onResetCalibration?() }
     @objc private func cancel() { onCancelCalibration?() }
+}
+
+/// 校准控件使用不透明颜色，避免底层聊天内容影响对比度；动态颜色跟随所在视图的有效外观。
+private enum CalibrationColors {
+    static let cardBackground = adaptive(light: 0xFAFAF9, dark: 0x24272E)
+    static let cardBorder = adaptive(light: 0xCBD5E1, dark: 0x64748B)
+    static let text = adaptive(light: 0x1F2937, dark: 0xF1F5F9)
+    static let primaryBackground = color(0x1D4ED8)
+    static let primaryPressedBackground = color(0x1E40AF)
+    static let secondaryBackground = adaptive(light: 0xE2E8F0, dark: 0x374151)
+    static let secondaryPressedBackground = adaptive(light: 0xCBD5E1, dark: 0x4B5563)
+    static let secondaryBorder = adaptive(light: 0x64748B, dark: 0x94A3B8)
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            color(appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light)
+        }
+    }
+
+    private static func color(_ rgb: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
+            green: CGFloat((rgb >> 8) & 0xFF) / 255,
+            blue: CGFloat(rgb & 0xFF) / 255,
+            alpha: 1)
+    }
+}
+
+/// 仅定制校准按钮的配色，点击、键盘操作和辅助功能仍由原生按钮处理。
+private final class CalibrationButton: NSButton {
+    init(title: String, target: AnyObject?, action: Selector?, isPrimary: Bool = false) {
+        super.init(frame: .zero)
+        let buttonCell = CalibrationButtonCell(textCell: title)
+        buttonCell.isPrimary = isPrimary
+        buttonCell.setButtonType(.momentaryPushIn)
+        buttonCell.bezelStyle = .regularSquare
+        buttonCell.isBordered = true
+        buttonCell.alignment = .center
+        buttonCell.font = .systemFont(ofSize: 13, weight: isPrimary ? .semibold : .regular)
+        cell = buttonCell
+        self.target = target
+        self.action = action
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// 显式绘制按钮颜色，防止非激活面板的系统样式降低对比度；按压与焦点沿用原生状态。
+private final class CalibrationButtonCell: NSButtonCell {
+    var isPrimary = false
+
+    override func drawBezel(withFrame frame: NSRect, in controlView: NSView) {
+        let background: NSColor
+        if isPrimary {
+            background = isHighlighted ? CalibrationColors.primaryPressedBackground : CalibrationColors.primaryBackground
+        } else {
+            background = isHighlighted ? CalibrationColors.secondaryPressedBackground : CalibrationColors.secondaryBackground
+        }
+        let path = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        background.setFill()
+        path.fill()
+        if !isPrimary {
+            CalibrationColors.secondaryBorder.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+
+    override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 13),
+            .foregroundColor: isPrimary ? NSColor.white : CalibrationColors.text,
+        ]
+        let size = (title.string as NSString).size(withAttributes: attributes)
+        let rect = NSRect(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2,
+                          width: size.width, height: size.height)
+        (title.string as NSString).draw(in: rect, withAttributes: attributes)
+        return rect
+    }
+
+    override func drawFocusRingMask(withFrame frame: NSRect, in controlView: NSView) {
+        NSBezierPath(roundedRect: frame, xRadius: 6, yRadius: 6).fill()
+    }
 }
 
 /// 本应用未激活时也响应第一次点击的按钮（遮罩所在面板不会激活本应用）。
