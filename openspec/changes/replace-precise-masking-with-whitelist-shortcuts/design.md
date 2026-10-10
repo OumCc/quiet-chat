@@ -1,0 +1,202 @@
+# 技术设计
+
+## 审阅摘要
+
+- 采用方案与原因：在现有不透明 MaskView 上放置静态白名单按钮；点击时执行微信主窗口的键盘搜索。入口不再依赖原列表位置，也不引入另一层浮动窗口。
+- 涉及边界：配置兼容、按钮与密码框布局、主窗口焦点交接、单次按键操作协调、旧 Capture / Detection 退役及必要测试调整。整块遮挡和窗口避让保留。
+- 关键兼容约束：默认 full；旧 precise 读取为 shortcuts；保留 whitelist 和通用设置。preciseListColumn 保留历史字段名，用于第二种方式校准；schemaVersion 仍为 1。
+- 验证方式：先通过 research V-001～V-003，补齐支持的微信版本、方向键序列、Unicode 输入及有界等待参数；随后验证配置与取消逻辑、两种打开路径、窗口避让、整块遮挡和构建。
+- 主要风险：手动路径不代表自动键盘输入已验证；系统激活和按键投递都没有聊天打开回执。结果歧义、客户端变更及无法观察搜索控件焦点属于路线限制，不以截图或鼠标坐标偷偷补齐。
+
+## 背景与约束
+
+[CODE] 当前 AppDelegate.refresh 驱动 PreciseRevealController，ListCapture 每 0.2 秒截图，稳定后用 Vision 识别白名单带区，再由 MaskPlanner 开洞。滚动立即清空带区，遮住区域无法把滚动传给微信。
+
+[USER] 本次采用固定按钮及「⌘F → 名称 → 回车」路线。普通聊天已经手动验证；文件传输助手要先用方向键选中「功能」卡片，Tab 无效。目标方式是纯键盘自动化，不读取画面。
+
+[CODE] 现有微信窗口跟踪只暴露窗口级辅助功能信息。不能据此假设搜索框、结果卡片或当前聊天身份可被程序读取。SDK 中事件投递返回 void，Unicode 字符串也可能被应用忽略（research S-10）。
+
+## 目标与非目标
+
+- 目标：稳定保留配置入口，点击后在已验证的微信版本中打开聊天；保持遮罩锁定、原窗口跟随和配置兼容。
+- 非目标：全局快捷键、可配置宏、搜索结果解析与消歧、跨版本自适应、截图/坐标/剪贴板兜底、数据库读取或联网。
+- 文档内的类型和接口名是实现建议，产品行为以三份 specs 为准；本轮不创建这些源文件。
+
+## 当前与目标流程
+
+当前：
+
+```text
+AppDelegate.refresh
+  → PreciseRevealController.update
+  → ListCapture → ContentChangeTracker → Vision
+  → ListRowParser → ChatNameMatcher → revealedBands
+  → MaskPlanner（上层窗口洞 + 白名单洞）→ MaskView
+```
+
+目标显示流程：
+
+```text
+AppConfig（mode、whitelist、校准）
+  + WeChatWindowTracker.snapshot
+  → MaskController
+  → MaskPlanner（仅上层窗口洞）
+  → MaskView（不透明底色、白名单按钮区域、底部密码框）
+```
+
+目标点击流程：
+
+```text
+按钮回调（完整名称）
+  → AppDelegate 核对模式、锁定、名单及主窗口
+  → WeChatShortcutController 开始唯一操作
+  → 遮罩让出键盘焦点，激活并聚焦已跟踪的微信主窗口
+  → 确认目标身份 → ⌘F → 等待 → ⌘A → 完整 Unicode 输入
+  → 按本机验证的时序等待搜索结果
+  → 普通聊天：回车
+  → 文件传输助手：已验证的方向键导航 → 回车
+  → 指令序列结束，恢复按钮；不修改 LockState
+```
+
+显示刷新不触发键盘操作。键盘操作只由当前名单按钮点击发起，不在后台循环重试。
+
+## 修改地图
+
+| 区域 | 路径与符号 | 当前职责 | 计划变更 | 证据或决策 |
+| --- | --- | --- | --- | --- |
+| 配置 | macos/QuietChatCore/Sources/QuietChatCore/AppConfig.swift：MaskMode、listColumnLayout(for:)；shared/config.schema.json | full / precise 与独立布局 | 新输出 full / shortcuts，旧 precise 读取兼容；复用历史布局字段，保留未知值回退 | D-001、D-005；现有 Codable 规则 |
+| 名单 | ChatWhitelist.swift；macos/QuietChat/App/WhitelistEditor.swift | 整理名单并编辑 | 保留整理，提示改为完整搜索名称，移除截断名称也可用的承诺 | D-002；spec chat-whitelist |
+| 遮罩 | macos/QuietChat/Masking/MaskView.swift、MaskController.swift、MaskPanel.swift | 绘制底色、洞、密码和校准 | 增加按钮滚动区域、点击回调和忙碌/错误反馈；移除 revealedBands 及识别相关传参 | D-001、D-004；现有视图及面板 |
+| 几何 | macos/QuietChatCore/Sources/QuietChatCore/MaskPlanner.swift：plan、decide | 上层窗口与聊天带区开洞 | 仅保留 occluders；移除 revealed / reservedBottomHeight 及精准专用常量 | D-004；窗口避让回归 |
+| 操作状态 | 新增 macos/QuietChatCore/Sources/QuietChatCore/ShortcutOperationState.swift | — | 小型忙碌与操作编号状态，保证旧任务完成不能影响新任务 | 单次执行和取消契约 |
+| 系统操作 | 新增 macos/QuietChat/Shortcuts/WeChatShortcutController.swift | — | 实现有界键盘操作及文件传输助手分支；不引入宏 DSL 或轮询识别 | D-002～D-004；V-001～V-003 |
+| 窗口焦点 | macos/QuietChat/WindowTracking/WeChatWindowTracker.swift；AXUIElement+Attributes.swift | 识别和监听主窗口 | 增加主窗口聚焦及焦点身份核对；复用既有 AX 元素和 windowID 映射 | 现有 mainWindow、pid、mainWindowID |
+| 装配 | macos/QuietChat/App/AppDelegate.swift | 配置、锁定、精准控制器 | 移除截图装配；连接按钮、焦点接口、操作生命周期及取消条件 | 现有 refresh、applyMaskMode、detach |
+| 菜单与日志 | StatusMenuController.swift、AccessibilityPermission.swift、Log.swift | 模式、授权、日志 | 替换模式名称，去除录屏授权接口；复用辅助功能流程并检查事件合成访问；操作日志不带名称 | D-001、D-004 |
+| 旧链路 | Capture/ListCapture.swift、Masking/PreciseRevealController.swift、App/ScreenRecordingPermission.swift；QuietChatDetection 及专用 Core 识别逻辑 | 取图和识别 | 在消费者替换后移除旧运行时文件、专用逻辑与失去意义的测试 | D-004；引用搜索已确认专用消费关系 |
+| 构建 | macos/QuietChatCore/Package.swift；macos/QuietChat.xcodeproj/project.pbxproj | Detection 产品与测试目标 | 移除 Detection 产品/target/testTarget 及 Xcode 引用，保留本地 Core 包 | 现有 package 与工程 |
+| 文档 | README.md、docs/architecture.md | 精准模式使用和隐私 | 同步新方式、搜索前提、权限、历史键名和能力限制 | 作为后续实施任务，本轮不修改 |
+
+旧 Core 识别逻辑包括 ChatNameMatcher、ListRowParser、ContentFingerprint、ContentChangeTracker、PreciseRevealState。移除前重新核对消费者；ChatWhitelist.normalized 与通用几何/锁定逻辑保留。tools/probe 下已有截图探测脚本是历史工具，不属于运行时，保留原文件。
+
+## 接口与契约映射
+
+### 配置读写
+
+| 字段 | 目标语义 | 读取与保存 |
+| --- | --- | --- |
+| maskMode | full / shortcuts | 缺失和未知值回退 full；旧 precise 映射 shortcuts；后续正常保存输出 shortcuts |
+| whitelist | 按顺序配置的完整搜索名称 | 保留 [String] 与现有 normalized 规则；不复用 OCR matcher |
+| listColumn | 整块遮挡校准 | 继承已有语义和值 |
+| preciseListColumn | 第二种方式的校准，保留历史键名 | 继续读取和编码原结构；缺失时从 listColumn 推导（左右边界相同，topInset=0） |
+| schemaVersion、password、hidePasswordInput、appearanceMode | 通用配置 | 版本仍为 1，值与原规则保持一致 |
+
+保留 preciseListColumn 是避免额外字段迁移的工程选择，不表示保留精准识别功能。shared schema 保留 precise 为仅供旧配置输入的兼容枚举值，文档和新编码只使用 full / shortcuts。加载兼容配置无需立即覆盖原文件；用户后续正常保存时写出目标模式值。
+
+示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "maskMode": "shortcuts",
+  "whitelist": ["文件传输助手", "项目群"],
+  "preciseListColumn": {"leftInset": 60, "topInset": 0, "width": 242}
+}
+```
+
+### UI 与协调接口
+
+- MaskController 向 MaskView 提供当前名称列表、是否执行中及短错误文字；MaskView 点击回调只传完整名称。模式与生命周期判断留在 AppDelegate，视图不直接发送系统按键。
+- 名称必须属于当前名单；操作开始时捕获名称、PID、主窗口 ID 及操作编号。不提供任意按键脚本或外部搜索文本入口。
+- WeChatWindowTracker 提供有界的主窗口聚焦操作与目标焦点检查。成功含义是观察到预期进程和窗口，而不是激活调用已返回；AX 读取失败视为无法确认。
+- WeChatShortcutController 接收名称和目标身份，报告忙碌、取消或可检测失败；提供 cancel()。它不访问 ConfigStore，不解锁、不控制截图。
+- ShortcutOperationState 只负责 begin / cancel / finish 的操作编号及忙碌约束，不生成键盘宏。系统按键与等待留在应用适配层。
+
+### 键盘输入与窗口焦点
+
+1. 操作开始前释放遮罩的输入焦点；不清空用户已经输入的密码，也不触发密码提交。
+2. 请求激活微信并抬起所跟踪的主窗口，使用实际前台 PID 和 AX 聚焦窗口身份进行有界确认；不一次性抬起所有微信窗口。
+3. 发送键盘事件前再次检查操作编号、取消状态、授权、目标窗口及前台身份。主窗口改变、窗口关闭/隐藏、前台切换或 AX 无法确认均停止后续事件。
+4. 使用成对的 keyDown / keyUp、独立的事件 flags，按目标 PID 发送。有限的按键集合只有搜索、全选、名称输入、方向键和回车；不建立全局键盘监听或修改系统快捷键。
+5. 名称采用 Unicode 键盘事件直接输入，保留完整内容，不读取或改写系统剪贴板。V-002 未通过时停止推进，不擅自改用粘贴。
+6. 以 V-003 确认的有限时序等待搜索打开与结果更新；等待参数集中在应用控制器内，记录实测依据，不作为用户配置。
+
+前台与窗口检查只能确认窗口身份，不能证明名称已经进入搜索框或结果加载完成。搜索控件焦点可观察性也要在 V-003 核实；若只能采用已验证时序，须在验证记录中明确该限制，不能把延时结束称为已检测到搜索就绪。若反复验证出现输入落入聊天编辑框、错误提交或无法稳定导航，则门禁失败。
+
+### 文件传输助手
+
+名单整理后，名称恰好为「文件传输助手」时进入内置分支。先搜索并等待，再执行 V-001 在支持版本上确定的方向键路径，最后一次回车提交。Tab 和鼠标定位不参与。
+
+本轮不规定「向下五次」「向上一次」或其他具体数量。图片只能证明结果结构，不能证明建议数量及循环导航。V-001 必须记录确切按键、起始选中状态和重复验证结果，再补充本设计。
+
+## 状态与交互行为
+
+### 按钮和密码框布局
+
+- 快捷入口方式保留底部 56 pt 的密码控件区域，按钮按名单顺序放在上方独立 NSScrollView 中；按钮区滚动不发送给微信原列表。
+- 使用现有 MaskPanel 和 MaskView 子视图，不新增与微信分离的置顶窗口。长标签可以截断显示并提供完整提示，点击始终使用保存字符串。
+- 名单为空时不生成按钮；密码框继续可用。解锁或校准时不显示快捷按钮，整块遮挡的居中提示和密码框保持原状。
+- 上层窗口洞仍由 MaskPlanner 生成。新增控件不能重新填上透明洞：保守实现可在洞与快捷容器相交时隐藏该容器并禁用交互，移开后恢复；密码框沿用现有相交隐藏规则。滚动容器背景保持透明。
+- 外观继承 NSApp.appearance，与已有遮罩、编辑窗口一致。
+
+### 操作状态
+
+```text
+idle → focusing → openingSearch → enteringName → awaitingResults
+     → navigating（仅文件传输助手）→ submitting → idle
+任一执行阶段 → cancelled / failed（短反馈）→ idle
+```
+
+- 正常待机：入口可点击，无截图或后台键盘任务。
+- 执行中：全部入口禁用，显示简短「正在打开…」；密码解锁入口仍保留。
+- 指令已发送：恢复按钮并清除处理中提示，不额外弹出成功通知，不设置聊天身份验证成功状态。
+- 可检测失败：停止后续事件，恢复按钮，显示「未能聚焦微信」「需要辅助功能权限」或「操作已取消」等简短文字，不把名称拼进系统错误或日志。
+
+使用可取消 Task 和递增操作编号；cancel() 使旧编号失效。旧任务超时、返回或清理时不能把后来的任务置空，也不能重新启用正在使用的按钮。重复点击不排队，不自动重试或重放回车。
+
+### 权限与校验
+
+沿用 AXIsProcessTrusted 和现有辅助功能授权引导，事件发送前检查 CGPreflightPostEventAccess。没有授权时不发送事件。菜单只保留与实际缺失访问相关的辅助功能入口，不申请录屏访问；若本机发现事件访问需要额外授权路径，先核实系统契约再调整授权提示。
+
+AppDelegate 在模式切换、解锁、名单更新、detach、应用退出及目标不再可见时取消操作。窗口跟踪的焦点变化和前台变化也进入取消/核对流程；每阶段发送前再核对，不仅依赖兜底刷新周期。
+
+## 决策与替代方案
+
+- 选择固定入口代替滚动转发：用户已确认替换原模式，恢复操作入口不再依赖实时列表。
+- 选择键盘导航代替文件传输助手坐标点击：用户验证方向键可用；坐标方案引入布局依赖，截图方案改变已选的无录屏路线。
+- 保留历史配置键代替重命名第二种校准字段：保留有效配置和独立校准，用描述澄清字段的新用途，减少迁移面。
+- 使用短生命周期操作代替持续监控：无聊天内容读取；操作完成只说明指令已发出，不新增虚假的结果确认接口。
+
+## 兼容、迁移与回滚
+
+- 旧 precise 配置加载到新模式；白名单及布局不删除，通用设置不重置。没有第二种校准时按既有规则推导，不沿用整块遮挡可能露出顶部聊天的上边距。
+- 用户原来授予的录屏权限无需主动撤销，程序停止请求和使用该权限；文档说明撤销不会影响新方式。
+- 新配置由旧应用读取时，旧 MaskMode 对 shortcuts 回退 full；名单及历史校准键仍可读。回滚不承诺恢复旧精准方式选择，也不自动改写用户文件来启用它。
+- 切回整块遮挡是新版本内的既有操作，取消进行中的快捷流程，不删除名单。
+- 新 OpenSpec 不修改或归档旧变更；后续发布规格时须以本目标规格为准，不能再合并旧精准方案的相反规则。旧变更的归档/历史整理另按用户授权处理。
+
+## 风险与缓解措施
+
+| 风险 | 处理与验收边界 |
+| --- | --- |
+| 按键导航受微信搜索状态或版本影响 | 先过 V-001，记录支持版本和起始状态；不猜方向键次数，不加入未授权兜底 |
+| Unicode 事件被 Qt 或输入法处理不同 | V-002 覆盖中文、英文、表情与输入法；不通过则停止输入方案实施 |
+| 主窗口激活请求未实际生效 | V-003 验证焦点交接；有界等待与真实身份核对，失败时不继续文字或回车 |
+| 窗口身份正确但搜索控件未就绪 | 无内容反馈的路线限制；实测时序与重复操作门禁，不能声称运行时完全检测或绝对无误 |
+| 重名、多个匹配或没有结果 | 本次不自动消歧、验证身份或对该情况声称成功；名称需要满足已确认搜索路径，用户可按原有规则解锁处理 |
+| 新按钮遮住上层窗口洞 | 控件相交时隐藏/禁用，容器背景透明；真实叠窗与移开场景验收 |
+| 清理 OCR 引用影响 Core 或工程 | 先查消费者，只删除本次替换造成的专用无用代码；保留通用名单、几何、锁定和历史探测工具 |
+
+## 测试策略
+
+- 配置：旧 precise 映射、缺失/未知模式默认、通用字段保持、历史布局读写、独立校准、shared schema 字段一致性。
+- 名单：沿用整理测试，新增完整特殊字符与长名称保持；旧 OCR 匹配测试随相应代码退役，不把旧前缀规则迁移到搜索。
+- 操作状态：重复开始被拒绝、取消后旧编号不可用、旧 finish 不能覆盖新操作、完成后恢复可点击。
+- 几何：保留整块遮挡与上层窗口洞测试，移除白名单带区测试；新增控件避让以本机 UI 验收为主。
+- 本机交互：两条打开路径；密码框焦点、已有搜索词、连续点击、执行中切前台/解锁/切模式、独立微信窗口、窗口隐藏/关闭及未授予录屏权限。
+- 构建：swift test --package-path macos/QuietChatCore；Xcode Debug 和 Release 构建及启动冒烟。仅使用既有 Swift/Xcode 工具链，不安装或迁移依赖。
+- 文档：新功能文案、权限说明和支持路径与最终实测一致；OpenSpec status 与 strict validate 通过。本轮只执行文档校验，不执行业务测试、构建或交互注入。
+
+## 未完成的技术验证
+
+V-001～V-003 尚未执行，方向键序列、等待参数和自动 Unicode 输入不能标为已验证。它们是已选方案的实施门禁；不存在未决的 Blocking 产品分支。若门禁证明当前路线无法实现已确认行为，停止相关实施，更新 research 并向用户说明需要改变的具体边界。
