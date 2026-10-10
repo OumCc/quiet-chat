@@ -19,7 +19,8 @@ struct AppConfigTests {
         whitelist: ["文件传输助手", "滴答清单"],
         preciseListColumn: ListColumnLayout(leftInset: 70, topInset: 0, width: 300),
         password: PasswordRecord(iterations: 100_000, salt: "c2FsdA==", hash: "aGFzaA=="),
-        hidePasswordInput: true)
+        hidePasswordInput: true,
+        appearanceMode: .dark)
 
     @Test func savedConfigRoundTrips() throws {
         let store = temporaryStore()
@@ -56,6 +57,28 @@ struct AppConfigTests {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(config.maskMode == .full)
         #expect(config.whitelist == ["文件传输助手"])
+    }
+
+    @Test func appearanceModeDefaultsToSystemForLegacyConfig() throws {
+        #expect(AppConfig.default.appearanceMode == .system)
+        let legacy = #"{"schemaVersion": 1, "maskMode": "precise", "whitelist": ["文件传输助手"], "hidePasswordInput": true}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(legacy.utf8))
+        #expect(config == AppConfig(maskMode: .precise, whitelist: ["文件传输助手"], hidePasswordInput: true))
+    }
+
+    @Test func unknownAppearanceModeFallsBackToSystem() throws {
+        let json = #"{"appearanceMode": "sepia", "maskMode": "precise", "hidePasswordInput": true}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config == AppConfig(maskMode: .precise, hidePasswordInput: true))
+    }
+
+    @Test(arguments: [AppearanceMode.system, .light, .dark])
+    func appearanceModeRoundTrips(_ mode: AppearanceMode) throws {
+        let store = temporaryStore()
+        var config = fullConfig
+        config.appearanceMode = mode
+        try store.save(config)
+        #expect(try store.load() == config)
     }
 
     /// 精准遮挡没有校准过时，沿用整块遮挡的左边距和宽度，上边距为 0；校准后两种方式各用各的。
@@ -99,6 +122,10 @@ struct AppConfigTests {
         let schema = try #require(try JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
         let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
         try expectSameFields(schema: schema, value: encoded, path: "$")
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let appearance = try #require(properties["appearanceMode"] as? [String: Any])
+        #expect(appearance["enum"] as? [String] == [AppearanceMode.system, .light, .dark].map(\.rawValue))
+        #expect(appearance["default"] as? String == AppearanceMode.system.rawValue)
     }
 
     private func expectSameFields(schema: [String: Any], value: [String: Any], path: String) throws {

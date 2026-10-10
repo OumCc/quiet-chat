@@ -17,6 +17,21 @@ public enum MaskMode: String, Codable, Sendable {
     }
 }
 
+/** 应用的外观偏好；跟随系统时由平台实时决定浅色或深色。 */
+public enum AppearanceMode: String, Codable, Sendable {
+    /** 跟随系统外观。 */
+    case system
+    /** 固定使用浅色外观。 */
+    case light
+    /** 固定使用深色外观。 */
+    case dark
+
+    /** 读取外观偏好；未知字符串回退到跟随系统，兼容更新版本的配置。 */
+    public init(from decoder: any Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .system
+    }
+}
+
 /// QuietChat 的持久化配置。
 public struct AppConfig: Codable, Equatable, Sendable {
     /// 当前配置格式版本；只有不兼容的格式变化才递增。
@@ -35,11 +50,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var password: PasswordRecord?
     /// 遮罩上的密码框是否隐藏输入内容；默认明文显示，记住用户最后一次的选择。
     public var hidePasswordInput: Bool
+    /** 整个应用的外观偏好；默认跟随系统，重启后沿用最后保存的选择。 */
+    public var appearanceMode: AppearanceMode
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
         maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
-        password: PasswordRecord? = nil, hidePasswordInput: Bool = false
+        password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system
     ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
@@ -48,6 +65,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.preciseListColumn = preciseListColumn
         self.password = password
         self.hidePasswordInput = hidePasswordInput
+        self.appearanceMode = appearanceMode
     }
 
     public static let `default` = AppConfig()
@@ -61,6 +79,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         preciseListColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .preciseListColumn)
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
+        appearanceMode = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode) ?? .system
     }
 
     /// 指定遮挡方式使用的列表栏布局。

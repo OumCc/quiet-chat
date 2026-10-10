@@ -2,6 +2,7 @@
 // 在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」），
 // 并维护锁定状态：密码解锁、主窗口关闭时自动锁定（见「锁定与解锁」）。
 // 遮挡方式（整块 / 精准）只决定锁定时遮住哪里：精准遮挡下把 PreciseRevealController 给出的带区交给遮罩开洞（见「精准遮挡」）。
+// 外观由应用统一设置，窗口和控件继承；切换时保留输入与校准草稿。
 
 import AppKit
 import QuietChatCore
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         quitOtherInstances()
         config = loadConfig()
+        applyAppearanceMode()
         applyMaskMode()
         preciseReveal.onChange = { [weak self] in
             guard let self else { return }
@@ -169,6 +171,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
+    // MARK: - 外观
+
+    /** 应用外观偏好；nil 让 AppKit 持续跟随系统变化，无需自行监听或保存当前系统颜色。 */
+    private func applyAppearanceMode() {
+        switch config.appearanceMode {
+        case .system:
+            NSApp.appearance = nil
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+
     // MARK: - 配置
 
     private func loadConfig() -> AppConfig {
@@ -247,6 +263,9 @@ extension AppDelegate: StatusMenuDelegate {
 
     var maskMode: MaskMode { config.maskMode }
 
+    /** 菜单按用户选择勾选，不将跟随系统解析为固定浅色或深色。 */
+    var appearanceMode: AppearanceMode { config.appearanceMode }
+
     var canEditWhitelist: Bool { config.maskMode == .precise && !lockState.isLocked }
 
     /// 权限被收回、或系统要求重新确认时，系统查询可能仍然返回"已授权"，所以读取画面失败也算。
@@ -303,6 +322,20 @@ extension AppDelegate: StatusMenuDelegate {
             whitelistEditor.close()
         }
         refresh()
+    }
+
+    /** 切换并保存整个应用的外观；保存失败时本次仍生效，不改变锁定状态或当前编辑内容。 */
+    func selectAppearanceMode(_ mode: AppearanceMode) {
+        guard mode != config.appearanceMode else { return }
+        config.appearanceMode = mode
+        applyAppearanceMode()
+        do {
+            try configStore.save(config)
+            Log.app.notice("外观：\(mode.rawValue, privacy: .public)")
+        } catch {
+            // 显示偏好保存失败时本次仍生效，下次启动读取最后成功保存的配置
+            Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func editWhitelist() {

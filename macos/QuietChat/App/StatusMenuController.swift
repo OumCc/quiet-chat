@@ -1,6 +1,6 @@
-// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、开机自启动和退出。
+// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、外观、开机自启动和退出。
 // 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
-// 恢复默认密码、切换遮挡方式和开机自启动不受锁定限制。
+// 恢复默认密码、切换遮挡方式、外观和开机自启动不受锁定限制。
 
 import AppKit
 import QuietChatCore
@@ -14,6 +14,8 @@ protocol StatusMenuDelegate: AnyObject {
     var canCalibrate: Bool { get }
     var launchesAtLogin: Bool { get }
     var maskMode: MaskMode { get }
+    /** 用户选择的外观偏好；跟随系统时也保持该选项勾选。 */
+    var appearanceMode: AppearanceMode { get }
     /// 精准遮挡且已解锁时才能编辑白名单。
     var canEditWhitelist: Bool { get }
     /// 选了精准遮挡，但没有屏幕录制权限或读取画面失败。
@@ -21,6 +23,8 @@ protocol StatusMenuDelegate: AnyObject {
     func requestAccessibilityPermission()
     func requestScreenRecordingPermission()
     func selectMaskMode(_ mode: MaskMode)
+    /** 切换整个应用的外观并保存偏好，锁定时也可调用。 */
+    func selectAppearanceMode(_ mode: AppearanceMode)
     func editWhitelist()
     func lockNow()
     func changePassword()
@@ -54,6 +58,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.appearance = NSApp.appearance
         menu.removeAllItems()
         guard let delegate else { return }
 
@@ -94,6 +99,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(whitelist)
 
         menu.addItem(.separator())
+        menu.addItem(.sectionHeader(title: "外观"))
+        let systemAppearance = makeItem("跟随系统", #selector(selectSystemAppearance))
+        systemAppearance.state = delegate.appearanceMode == .system ? .on : .off
+        menu.addItem(systemAppearance)
+        let lightAppearance = makeItem("浅色模式", #selector(selectLightAppearance))
+        lightAppearance.state = delegate.appearanceMode == .light ? .on : .off
+        menu.addItem(lightAppearance)
+        let darkAppearance = makeItem("深色模式", #selector(selectDarkAppearance))
+        darkAppearance.state = delegate.appearanceMode == .dark ? .on : .off
+        menu.addItem(darkAppearance)
+
+        menu.addItem(.separator())
         let launchAtLogin = makeItem("开机自启动", #selector(toggleLaunchAtLogin))
         launchAtLogin.state = delegate.launchesAtLogin ? .on : .off
         menu.addItem(launchAtLogin)
@@ -118,6 +135,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func requestScreenRecordingPermission() { delegate?.requestScreenRecordingPermission() }
     @objc private func selectFullMask() { delegate?.selectMaskMode(.full) }
     @objc private func selectPreciseMask() { delegate?.selectMaskMode(.precise) }
+    @objc private func selectSystemAppearance() { delegate?.selectAppearanceMode(.system) }
+    @objc private func selectLightAppearance() { delegate?.selectAppearanceMode(.light) }
+    @objc private func selectDarkAppearance() { delegate?.selectAppearanceMode(.dark) }
     @objc private func editWhitelist() { delegate?.editWhitelist() }
     @objc private func lockNow() { delegate?.lockNow() }
     @objc private func changePassword() { delegate?.changePassword() }
