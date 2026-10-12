@@ -2,6 +2,7 @@
 // 在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」），
 // 并维护锁定状态：密码解锁、主窗口关闭时自动锁定（见「锁定与解锁」）。
 // 快捷入口由用户点击发起一次键盘搜索；显示刷新不发按键，模式和目标失效时取消。
+// 分阶段试验时序随配置保存；变更先取消旧操作，点击时传入不可变快照。
 // 外观由应用统一设置，窗口和控件继承；切换时保留输入与校准草稿。
 
 import AppKit
@@ -69,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             shortcuts.reportUnavailableTarget()
             return
         }
-        shortcuts.start(name: name, tracker: tracker, target: target,
+        shortcuts.start(name: name, timing: config.shortcutTiming, tracker: tracker, target: target,
                         releaseFocus: { [weak self] in self?.maskController.releaseInputFocus() },
                         isAllowed: { [weak self, weak tracker] in
             guard let self, let tracker else { return false }
@@ -313,6 +314,9 @@ extension AppDelegate: StatusMenuDelegate {
     /** 菜单按用户选择勾选，不将跟随系统解析为固定浅色或深色。 */
     var appearanceMode: AppearanceMode { config.appearanceMode }
 
+    /** 当前分阶段试验时序；菜单显示保存选择，搜索开始时再捕获快照。 */
+    var shortcutTiming: ShortcutTiming { config.shortcutTiming }
+
     var canEditWhitelist: Bool { config.maskMode == .shortcuts && !lockState.isLocked }
 
     /// 以系统登录项为准，不写入配置：用户也可能在「系统设置 → 通用 → 登录项」里直接增删，
@@ -368,6 +372,18 @@ extension AppDelegate: StatusMenuDelegate {
         } catch {
             // 显示偏好保存失败时本次仍生效，下次启动读取最后成功保存的配置
             Log.app.error("配置保存失败：\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /** 只在快捷入口方式修改并保存时序；先取消旧搜索，保存失败时本次仍生效。 */
+    func selectShortcutTiming(_ timing: ShortcutTiming) {
+        guard config.maskMode == .shortcuts, timing != config.shortcutTiming else { return }
+        shortcuts.cancel()
+        config.shortcutTiming = timing
+        do {
+            try configStore.save(config)
+        } catch {
+            Log.app.error("快捷入口时序保存失败：\(error.localizedDescription, privacy: .public)")
         }
     }
 

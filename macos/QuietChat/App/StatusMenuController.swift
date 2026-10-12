@@ -1,4 +1,4 @@
-// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、外观、开机自启动和退出。
+// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、分阶段速度、外观、开机自启动和退出。
 // 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
 // 恢复默认密码、切换遮挡方式、外观和开机自启动不受锁定限制。
 
@@ -16,6 +16,8 @@ protocol StatusMenuDelegate: AnyObject {
     var maskMode: MaskMode { get }
     /** 用户选择的外观偏好；跟随系统时也保持该选项勾选。 */
     var appearanceMode: AppearanceMode { get }
+    /** 当前快捷入口时序；总和仅表示固定等待，不表示聊天已经打开。 */
+    var shortcutTiming: ShortcutTiming { get }
     /** 快捷入口方式且已解锁时才能编辑白名单。 */
     var canEditWhitelist: Bool { get }
     /** 菜单接管输入时停止未完成搜索，不改变锁定状态或方式。 */
@@ -24,6 +26,8 @@ protocol StatusMenuDelegate: AnyObject {
     func selectMaskMode(_ mode: MaskMode)
     /** 切换整个应用的外观并保存偏好，锁定时也可调用。 */
     func selectAppearanceMode(_ mode: AppearanceMode)
+    /** 修改并保存后续搜索时序；先取消旧操作，不主动发起搜索，锁定时也可调用。 */
+    func selectShortcutTiming(_ timing: ShortcutTiming)
     func editWhitelist()
     func lockNow()
     func changePassword()
@@ -32,10 +36,45 @@ protocol StatusMenuDelegate: AnyObject {
     func toggleLaunchAtLogin()
 }
 
+/** 重建状态菜单与时序试验入口；参数选择交给 delegate，搜索始终由白名单按钮发起。 */
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private weak var delegate: (any StatusMenuDelegate)?
+
+    private enum TimingStage: Int, CaseIterable {
+        case searchOpen, selectAll, results
+
+        var title: String {
+            switch self {
+            case .searchOpen: "打开搜索"
+            case .selectAll: "全选旧搜索词"
+            case .results: "等待搜索结果"
+            }
+        }
+
+        var maximum: Int { value(in: .baseline) }
+        var presets: [Int] { [maximum, maximum / 2, maximum / 4, maximum / 8, maximum / 16, 0] }
+
+        func value(in timing: ShortcutTiming) -> Int {
+            switch self {
+            case .searchOpen: timing.searchOpenMs
+            case .selectAll: timing.selectAllMs
+            case .results: timing.resultsMs
+            }
+        }
+
+        func replacing(_ milliseconds: Int, in timing: ShortcutTiming) -> ShortcutTiming {
+            switch self {
+            case .searchOpen:
+                ShortcutTiming(searchOpenMs: milliseconds, selectAllMs: timing.selectAllMs, resultsMs: timing.resultsMs)
+            case .selectAll:
+                ShortcutTiming(searchOpenMs: timing.searchOpenMs, selectAllMs: milliseconds, resultsMs: timing.resultsMs)
+            case .results:
+                ShortcutTiming(searchOpenMs: timing.searchOpenMs, selectAllMs: timing.selectAllMs, resultsMs: milliseconds)
+            }
+        }
+    }
 
     init(delegate: any StatusMenuDelegate) {
         self.delegate = delegate
@@ -93,6 +132,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let whitelist = makeItem("编辑白名单…", #selector(editWhitelist))
         whitelist.isEnabled = delegate.canEditWhitelist
         menu.addItem(whitelist)
+        let timing = makeShortcutTimingItem(delegate.shortcutTiming)
+        timing.isEnabled = delegate.maskMode == .shortcuts
+        menu.addItem(timing)
 
         menu.addItem(.separator())
         menu.addItem(.sectionHeader(title: "外观"))
@@ -119,6 +161,65 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         delegate?.prepareToOpenStatusMenu()
     }
 
+    private func makeShortcutTimingItem(_ timing: ShortcutTiming) -> NSMenuItem {
+        let item = NSMenuItem(title: "快捷入口速度（测试）", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: item.title)
+        menu.autoenablesItems = false
+        menu.addItem(makeDisabledItem("固定等待合计：\(timing.totalMs) 毫秒"))
+        menu.addItem(.separator())
+        for stage in TimingStage.allCases {
+            let current = stage.value(in: timing)
+            let stageItem = NSMenuItem(title: "\(stage.title)：\(current) 毫秒", action: nil, keyEquivalent: "")
+            let stageMenu = NSMenu(title: stage.title)
+            stageMenu.autoenablesItems = false
+            for milliseconds in stage.presets {
+                let suffix = milliseconds == stage.maximum ? "（基准）" : milliseconds == 0 ? "（零等待）" : ""
+                let preset = makeItem("\(milliseconds) 毫秒\(suffix)", #selector(selectTimingPreset(_:)))
+                preset.tag = stage.rawValue
+                preset.representedObject = milliseconds
+                preset.state = current == milliseconds ? .on : .off
+                stageMenu.addItem(preset)
+            }
+            stageMenu.addItem(.separator())
+            let isCustom = !stage.presets.contains(current)
+            let custom = makeItem(isCustom ? "自定义（\(current) 毫秒）…" : "自定义…", #selector(customizeTiming(_:)))
+            custom.tag = stage.rawValue
+            custom.state = isCustom ? .on : .off
+            stageMenu.addItem(custom)
+            stageItem.submenu = stageMenu
+            menu.addItem(stageItem)
+        }
+        menu.addItem(.separator())
+        menu.addItem(makeItem("恢复基准（700 毫秒）", #selector(restoreTimingBaseline)))
+        item.submenu = menu
+        return item
+    }
+
+    private func promptTiming(for stage: TimingStage, current: Int) -> Int? {
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = String(current)
+        field.setAccessibilityLabel("等待时间（毫秒）")
+        var problem: String?
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "自定义\(stage.title)时间"
+            alert.informativeText = problem ?? "输入 0～\(stage.maximum) 之间的整数，单位为毫秒。"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "保存")
+            alert.addButton(withTitle: "取消")
+            alert.window.initialFirstResponder = field
+            NSApp.activate()
+            field.selectText(nil)
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            let input = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let milliseconds = Int(input), (0...stage.maximum).contains(milliseconds) else {
+                problem = "请输入 0～\(stage.maximum) 之间的整数毫秒值。"
+                continue
+            }
+            return milliseconds
+        }
+    }
+
     private func makeItem(_ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
@@ -137,6 +238,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func selectSystemAppearance() { delegate?.selectAppearanceMode(.system) }
     @objc private func selectLightAppearance() { delegate?.selectAppearanceMode(.light) }
     @objc private func selectDarkAppearance() { delegate?.selectAppearanceMode(.dark) }
+    @objc private func selectTimingPreset(_ sender: NSMenuItem) {
+        guard let delegate, delegate.maskMode == .shortcuts,
+              let stage = TimingStage(rawValue: sender.tag), let milliseconds = sender.representedObject as? Int else { return }
+        delegate.selectShortcutTiming(stage.replacing(milliseconds, in: delegate.shortcutTiming))
+    }
+    @objc private func customizeTiming(_ sender: NSMenuItem) {
+        guard let delegate, delegate.maskMode == .shortcuts, let stage = TimingStage(rawValue: sender.tag),
+              let milliseconds = promptTiming(for: stage, current: stage.value(in: delegate.shortcutTiming)) else { return }
+        delegate.selectShortcutTiming(stage.replacing(milliseconds, in: delegate.shortcutTiming))
+    }
+    @objc private func restoreTimingBaseline() {
+        guard let delegate, delegate.maskMode == .shortcuts else { return }
+        delegate.selectShortcutTiming(.baseline)
+    }
     @objc private func editWhitelist() { delegate?.editWhitelist() }
     @objc private func lockNow() { delegate?.lockNow() }
     @objc private func changePassword() { delegate?.changePassword() }

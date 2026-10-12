@@ -45,6 +45,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var maskMode: MaskMode
     /** 快捷入口的完整搜索名称，保存前由 `ChatWhitelist.normalized` 整理。 */
     public var whitelist: [String]
+    /** 快捷入口的分阶段试验时序；默认基准，重启沿用最后成功保存的选择。 */
+    public var shortcutTiming: ShortcutTiming
     /** 快捷入口方式的独立校准；保留历史键名，nil 时由整块遮挡布局推导。 */
     public var preciseListColumn: ListColumnLayout?
     /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
@@ -54,15 +56,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /** 整个应用的外观偏好；默认跟随系统，重启后沿用最后保存的选择。 */
     public var appearanceMode: AppearanceMode
 
+    /** 创建持久化配置；省略快捷时序时沿用 150／50／500 毫秒基准。 */
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
         maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
-        password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system
+        password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system,
+        shortcutTiming: ShortcutTiming = .baseline
     ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
         self.maskMode = maskMode
         self.whitelist = whitelist
+        self.shortcutTiming = shortcutTiming
         self.preciseListColumn = preciseListColumn
         self.password = password
         self.hidePasswordInput = hidePasswordInput
@@ -71,12 +76,14 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static let `default` = AppConfig()
 
+    /** 读取兼容配置；时序对象无效时只回退时序，不丢弃密码、名单或其他有效字段。 */
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         listColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .listColumn) ?? .default
         maskMode = try container.decodeIfPresent(MaskMode.self, forKey: .maskMode) ?? .full
         whitelist = try container.decodeIfPresent([String].self, forKey: .whitelist) ?? []
+        shortcutTiming = (try? container.decode(ShortcutTiming.self, forKey: .shortcutTiming)) ?? .baseline
         preciseListColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .preciseListColumn)
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false

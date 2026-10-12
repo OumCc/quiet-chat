@@ -20,12 +20,57 @@ struct AppConfigTests {
         preciseListColumn: ListColumnLayout(leftInset: 70, topInset: 0, width: 300),
         password: PasswordRecord(iterations: 100_000, salt: "c2FsdA==", hash: "aGFzaA=="),
         hidePasswordInput: true,
-        appearanceMode: .dark)
+        appearanceMode: .dark,
+        shortcutTiming: ShortcutTiming(searchOpenMs: 56, selectAllMs: 12, resultsMs: 125))
 
     @Test func savedConfigRoundTrips() throws {
         let store = temporaryStore()
         try store.save(fullConfig)
         #expect(try store.load() == fullConfig)
+    }
+
+    @Test func legacyConfigWithoutTimingPreservesOtherSettingsAndFile() throws {
+        let store = temporaryStore()
+        var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        legacy.removeValue(forKey: "shortcutTiming")
+        let originalData = try JSONSerialization.data(withJSONObject: legacy)
+        try FileManager.default.createDirectory(at: store.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try originalData.write(to: store.fileURL)
+
+        var expected = fullConfig
+        expected.shortcutTiming = .baseline
+        #expect(try store.load() == expected)
+        #expect(try Data(contentsOf: store.fileURL) == originalData)
+        #expect(expected.schemaVersion == 1)
+    }
+
+    @Test(arguments: ["null", "false", "\"fast\"", "[]", "123"])
+    func invalidTimingObjectDoesNotDiscardOtherConfig(_ invalid: String) throws {
+        var values = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        values["shortcutTiming"] = try JSONSerialization.jsonObject(with: Data(invalid.utf8), options: [.fragmentsAllowed])
+        let data = try JSONSerialization.data(withJSONObject: values)
+        var expected = fullConfig
+        expected.shortcutTiming = .baseline
+        #expect(try JSONDecoder().decode(AppConfig.self, from: data) == expected)
+    }
+
+    @Test func timingUpdateAndRestoreRoundTripWithoutChangingOtherSettings() throws {
+        let store = temporaryStore()
+        var config = fullConfig
+        config.shortcutTiming = ShortcutTiming(
+            searchOpenMs: config.shortcutTiming.searchOpenMs,
+            selectAllMs: config.shortcutTiming.selectAllMs,
+            resultsMs: 0)
+        try store.save(config)
+        #expect(try store.load() == config)
+        #expect(config.shortcutTiming.searchOpenMs == fullConfig.shortcutTiming.searchOpenMs)
+        #expect(config.shortcutTiming.selectAllMs == fullConfig.shortcutTiming.selectAllMs)
+
+        config.shortcutTiming = .baseline
+        try store.save(config)
+        var expected = fullConfig
+        expected.shortcutTiming = .baseline
+        #expect(try store.load() == expected)
     }
 
     @Test func legacyPrecisePreservesAllFieldsAndMigratesOnSave() throws {
@@ -155,6 +200,17 @@ struct AppConfigTests {
         let appearance = try #require(properties["appearanceMode"] as? [String: Any])
         #expect(appearance["enum"] as? [String] == [AppearanceMode.system, .light, .dark].map(\.rawValue))
         #expect(appearance["default"] as? String == AppearanceMode.system.rawValue)
+        let timing = try #require(properties["shortcutTiming"] as? [String: Any])
+        let timingProperties = try #require(timing["properties"] as? [String: Any])
+        let defaults = try #require(timing["default"] as? [String: Int])
+        for (key, baseline) in [("searchOpenMs", 150), ("selectAllMs", 50), ("resultsMs", 500)] {
+            let field = try #require(timingProperties[key] as? [String: Any])
+            #expect(field["type"] as? String == "integer")
+            #expect(field["minimum"] as? Int == 0)
+            #expect(field["maximum"] as? Int == baseline)
+            #expect(field["default"] as? Int == baseline)
+            #expect(defaults[key] == baseline)
+        }
     }
 
     private func expectSameFields(schema: [String: Any], value: [String: Any], path: String) throws {

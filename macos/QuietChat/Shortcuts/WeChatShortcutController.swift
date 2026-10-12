@@ -35,9 +35,9 @@ final class WeChatShortcutController {
         onChange?()
     }
 
-    /** 只接受调用方核对后的名单项；忙碌时拒绝，释放输入焦点后执行一次，不排队或重试。 */
+    /** 接受已核对名单项并捕获时序快照；忙碌时拒绝，释放焦点后执行一次，不排队或重试。 */
     @discardableResult
-    func start(name: String, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
+    func start(name: String, timing: ShortcutTiming, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
                releaseFocus: @escaping () -> Void, isAllowed: @escaping () -> Bool) -> Bool {
         guard !isBusy, isAllowed() else { return false }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else {
@@ -47,6 +47,7 @@ final class WeChatShortcutController {
         }
         guard let id = state.begin() else { return false }
         startedAt = .now
+        Log.shortcuts.notice("stage=started elapsed-ms=0 search-open-ms=\(timing.searchOpenMs, privacy: .public) select-all-ms=\(timing.selectAllMs, privacy: .public) results-ms=\(timing.resultsMs, privacy: .public)")
         activeTracker = tracker
         activeTarget = target
         hasConfirmedFocus = false
@@ -57,7 +58,7 @@ final class WeChatShortcutController {
             do {
                 guard mayContinue() else { throw CancellationError() }
                 releaseFocus()
-                let result = try await self.execute(name: name, tracker: tracker, target: target, mayContinue: mayContinue)
+                let result = try await self.execute(name: name, timing: timing, tracker: tracker, target: target, mayContinue: mayContinue)
                 self.finish(id, message: result, errorCode: "none")
             } catch {
                 let code = (error as? OperationError)?.rawValue
@@ -120,9 +121,9 @@ final class WeChatShortcutController {
         Log.shortcuts.notice("stage=\(stage, privacy: .public) elapsed-ms=\(milliseconds) error=\(errorCode, privacy: .public)")
     }
 
-    private func execute(name: String, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
+    private func execute(name: String, timing: ShortcutTiming, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
                  mayContinue: () -> Bool) async throws -> String? {
-        // 首轮提速参数待本机实测；等待不能当作搜索控件就绪或聊天身份回执。
+        // 按本次快照使用试验时序；等待不能当作搜索控件就绪或聊天身份回执。
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw OperationError.permissionMissing }
         record(stage: "focusing")
         try await tracker.focusMainWindow(target, mayContinue: mayContinue)
@@ -130,14 +131,14 @@ final class WeChatShortcutController {
         hasConfirmedFocus = true
         record(stage: "opening-search")
         try post(key: 3, flags: .maskCommand, tracker: tracker, target: target, mayContinue: mayContinue)
-        try await wait(.milliseconds(150), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(timing.searchOpenMs), tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "selecting-old-query")
         try post(key: 0, flags: .maskCommand, tracker: tracker, target: target, mayContinue: mayContinue)
-        try await wait(.milliseconds(50), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(timing.selectAllMs), tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "entering-name")
         try post(text: name, tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "awaiting-results")
-        try await wait(.milliseconds(500), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(timing.resultsMs), tracker: tracker, target: target, mayContinue: mayContinue)
         if name == "文件传输助手" {
             record(stage: "manual-selection")
             return "请在微信点击『功能』中的文件传输助手"

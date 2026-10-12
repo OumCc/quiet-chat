@@ -48,6 +48,34 @@
       },
       "default": []
     },
+    "shortcutTiming": {
+      "description": "快捷入口分阶段试验等待，单位为整数毫秒；只影响后续主动点击，保存后重启沿用。缺失或无效对象回退基准，单段缺失、类型错误或越界只回退该段。零值不跳过权限、焦点与取消校验；总和不表示真实聊天打开耗时。",
+      "type": "object",
+      "default": { "searchOpenMs": 150, "selectAllMs": 50, "resultsMs": 500 },
+      "properties": {
+        "searchOpenMs": {
+          "description": "打开搜索后等待；无效值回退 150。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 150,
+          "default": 150
+        },
+        "selectAllMs": {
+          "description": "全选旧搜索词后等待；无效值回退 50。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50,
+          "default": 50
+        },
+        "resultsMs": {
+          "description": "输入名称后等待；无效值回退 500。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500,
+          "default": 500
+        }
+      }
+    },
     "preciseListColumn": {
       "description": "快捷入口方式的独立校准，保留 preciseListColumn 历史键名，结构同 listColumn，校准后才写入。缺失时沿用 listColumn 的 leftInset 和 width，topInset 取 0。",
       "type": "object",
