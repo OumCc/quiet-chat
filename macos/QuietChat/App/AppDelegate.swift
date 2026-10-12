@@ -1,7 +1,7 @@
 // 应用装配：加载配置、处理辅助功能授权、随微信进程启动/退出创建或销毁窗口跟踪器，
 // 在任何可能改变遮罩位置或可见性的时刻刷新遮罩（刷新时机见 docs/architecture.md「刷新时机」），
 // 并维护锁定状态：密码解锁、主窗口关闭时自动锁定（见「锁定与解锁」）。
-// 遮挡方式（整块 / 精准）只决定锁定时遮住哪里：精准遮挡下把 PreciseRevealController 给出的带区交给遮罩开洞（见「精准遮挡」）。
+// 快捷入口由用户点击发起一次键盘搜索；显示刷新不发按键，模式和目标失效时取消。
 // 外观由应用统一设置，窗口和控件继承；切换时保留输入与校准草稿。
 
 import AppKit
@@ -15,7 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockState = LockState()
     private let permission = AccessibilityPermission()
     private let maskController = MaskController()
-    private let preciseReveal = PreciseRevealController()
+    private let shortcuts = WeChatShortcutController()
+    private var lastMainWindowID: CGWindowID?
     private let whitelistEditor = WhitelistEditorController()
     private var statusMenu: StatusMenuController?
     private var refreshDriver: RefreshDriver?
@@ -26,9 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config = loadConfig()
         applyAppearanceMode()
         applyMaskMode()
-        preciseReveal.onChange = { [weak self] in
+        shortcuts.onChange = { [weak self] in
             guard let self else { return }
-            self.maskController.revealedBands = self.preciseReveal.revealedBands
+            self.maskController.updateShortcutFeedback(isBusy: self.shortcuts.isBusy, message: self.shortcuts.message)
+        }
+        maskController.onShortcut = { [weak self] name in self?.openShortcut(name) }
+        maskController.onPasswordFocus = { [weak self] in
+            guard let self, self.shortcuts.isBusy else { return }
+            self.shortcuts.cancel(showFeedback: true)
         }
         maskController.onCalibrationFinished = { [weak self] layout in self?.saveListColumn(layout) }
         maskController.onUnlockAttempt = { [weak self] password in self?.attemptUnlock(with: password) ?? false }
@@ -46,6 +52,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.startTracking()
             }
         }
+    }
+
+    /** 退出时使旧操作失效，再释放窗口和刷新监听。 */
+    func applicationWillTerminate(_ notification: Notification) {
+        shortcuts.cancel()
+        tracker?.stop()
+        refreshDriver?.stop()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    private func openShortcut(_ name: String) {
+        guard config.maskMode == .shortcuts, lockState.isLocked, maskController.mode == .masking,
+              ChatWhitelist.normalized(config.whitelist).contains(name) else { return }
+        guard let tracker, let target = tracker.shortcutTarget() else {
+            shortcuts.reportUnavailableTarget()
+            return
+        }
+        shortcuts.start(name: name, tracker: tracker, target: target,
+                        releaseFocus: { [weak self] in self?.maskController.releaseInputFocus() },
+                        isAllowed: { [weak self, weak tracker] in
+            guard let self, let tracker else { return false }
+            return self.config.maskMode == .shortcuts && self.lockState.isLocked
+                && self.maskController.mode == .masking && self.maskController.isShowing
+                && self.tracker === tracker && tracker.shortcutTarget() == target
+                && ChatWhitelist.normalized(self.config.whitelist).contains(name)
+        })
     }
 
     /// 只保留一个实例：两个实例会画出两层遮罩。新实例（例如从 Xcode 重新运行的版本）接替旧实例。
@@ -104,6 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func detach() {
+        shortcuts.cancel()
+        lastMainWindowID = nil
         guard let tracker else { return }
         tracker.stop()
         self.tracker = nil
@@ -116,11 +150,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.notice("微信主窗口已关闭，自动锁定")
             applyLockState()
         }
-        // 先让精准遮挡按最新状态决定露出哪些行，再画遮罩：条件不满足时这一次刷新就会全部盖住
-        preciseReveal.update(
-            mode: config.maskMode, isLocked: lockState.isLocked, snapshot: snapshot, windowID: tracker?.mainWindowID,
-            layout: config.listColumnLayout(for: .precise), whitelist: config.whitelist)
-        maskController.revealedBands = preciseReveal.revealedBands
+        if lastMainWindowID != tracker?.mainWindowID {
+            shortcuts.cancel()
+            lastMainWindowID = tracker?.mainWindowID
+        }
+        if config.maskMode != .shortcuts || !lockState.isLocked || maskController.mode != .masking
+            || snapshot?.presence != .visible {
+            shortcuts.cancel()
+        } else {
+            shortcuts.cancelIfTargetInvalid()
+        }
         maskController.update(snapshot: snapshot)
     }
 
@@ -138,8 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// 把锁定状态落实到遮罩和菜单栏图标。精准遮挡要不要读取画面由随后的 refresh() 决定。
+    /** 落实锁定状态；解锁取消按键任务，重新锁定继续沿用当前方式。 */
     private func applyLockState() {
+        shortcuts.cancel()
         maskController.isLocked = lockState.isLocked
         statusMenu?.updateIcon()
         // 编辑白名单等于放开对应的聊天，锁定后不能继续；未保存的修改丢弃
@@ -152,15 +192,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 按当前遮挡方式设置遮罩：用哪一套布局、密码框放在哪里、底部留不留一条。
     private func applyMaskMode() {
-        let isPrecise = config.maskMode == .precise
+        shortcuts.cancel()
         maskController.layout = config.listColumnLayout(for: config.maskMode)
-        maskController.reservedBottomHeight = isPrecise ? MaskPlanner.preciseReservedBottomHeight : 0
-        maskController.lockControlsPlacement =
-            isPrecise ? .bottomStrip(height: MaskPlanner.preciseReservedBottomHeight) : .centered
+        maskController.usesShortcuts = config.maskMode == .shortcuts
+        maskController.shortcutNames = ChatWhitelist.normalized(config.whitelist)
+        maskController.lockControlsPlacement = config.maskMode == .shortcuts ? .bottomStrip(height: 56) : .centered
     }
 
     private func saveWhitelist(_ whitelist: [String]) {
+        shortcuts.cancel()
         config.whitelist = whitelist
+        maskController.shortcutNames = whitelist
         do {
             try configStore.save(config)
             // 名称不写入日志
@@ -202,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch config.maskMode {
         case .full:
             config.listColumn = layout
-        case .precise:
+        case .shortcuts:
             config.preciseListColumn = layout
         }
         do {
@@ -245,17 +287,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 菜单栏
 
 extension AppDelegate: StatusMenuDelegate {
-    var statusDescription: String {
-        guard permission.isGranted else { return "需要辅助功能权限" }
-        if needsScreenRecordingPermission { return "精准遮挡需要屏幕录制权限" }
-        if maskController.mode == .calibrating { return "正在校准遮罩位置" }
-        guard lockState.isLocked else { return "已解锁" }
-        if config.maskMode == .precise { return "已锁定 · 精准遮挡" }
-        guard tracker != nil else { return "已锁定 · 微信未运行" }
-        return maskController.isShowing ? "已锁定 · 在遮罩上输入密码解锁" : "已锁定 · 微信窗口未显示"
+    /** 自己的菜单取得输入时也视为离开微信目标，立即使旧搜索失效。 */
+    func prepareToOpenStatusMenu() {
+        if shortcuts.isBusy { shortcuts.cancel(showFeedback: true) }
     }
 
-    var needsAccessibilityPermission: Bool { !permission.isGranted }
+    var statusDescription: String {
+        guard permission.isGranted else { return "需要辅助功能权限" }
+        if maskController.mode == .calibrating { return "正在校准遮罩位置" }
+        guard lockState.isLocked else { return "已解锁" }
+        guard tracker != nil else { return "已锁定 · 微信未运行" }
+        if config.maskMode == .shortcuts, !permission.canPostEvents { return "已锁定 · 快捷入口需要键盘合成权限" }
+        let visibleStatus = config.maskMode == .shortcuts ? "已锁定 · 白名单快捷入口" : "已锁定 · 在遮罩上输入密码解锁"
+        return maskController.isShowing ? visibleStatus : "已锁定 · 微信窗口未显示"
+    }
+
+    var needsAccessibilityPermission: Bool { !permission.isGranted || (config.maskMode == .shortcuts && !permission.canPostEvents) }
 
     var isLocked: Bool { lockState.isLocked }
 
@@ -266,26 +313,16 @@ extension AppDelegate: StatusMenuDelegate {
     /** 菜单按用户选择勾选，不将跟随系统解析为固定浅色或深色。 */
     var appearanceMode: AppearanceMode { config.appearanceMode }
 
-    var canEditWhitelist: Bool { config.maskMode == .precise && !lockState.isLocked }
-
-    /// 权限被收回、或系统要求重新确认时，系统查询可能仍然返回"已授权"，所以读取画面失败也算。
-    var needsScreenRecordingPermission: Bool {
-        config.maskMode == .precise && (!ScreenRecordingPermission.isGranted || preciseReveal.isCaptureFailing)
-    }
+    var canEditWhitelist: Bool { config.maskMode == .shortcuts && !lockState.isLocked }
 
     /// 以系统登录项为准，不写入配置：用户也可能在「系统设置 → 通用 → 登录项」里直接增删，
     /// 菜单每次打开都重新读取，两边不会不一致。系统默认没有登记，即默认关闭。
     var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
 
     func requestAccessibilityPermission() {
-        permission.request()
+        if config.maskMode == .shortcuts { permission.requestShortcutAccess() }
+        else { permission.request() }
         permission.openSystemSettings()
-    }
-
-    func requestScreenRecordingPermission() {
-        ScreenRecordingPermission.request()
-        ScreenRecordingPermission.openSystemSettings()
-        preciseReveal.recheckPermission()
     }
 
     func lockNow() {
@@ -298,6 +335,7 @@ extension AppDelegate: StatusMenuDelegate {
     /// 锁定时也能切换：遮挡方式只决定遮住哪里，不改变锁定状态。
     func selectMaskMode(_ mode: MaskMode) {
         guard mode != config.maskMode else { return }
+        shortcuts.cancel()
         config.maskMode = mode
         do {
             try configStore.save(config)
@@ -309,12 +347,7 @@ extension AppDelegate: StatusMenuDelegate {
         maskController.cancelCalibration()
         applyMaskMode()
         switch mode {
-        case .precise:
-            // 屏幕录制权限只在这里申请；使用整块遮挡时从不申请
-            if !ScreenRecordingPermission.isGranted {
-                ScreenRecordingPermission.request()
-            }
-            preciseReveal.recheckPermission()
+        case .shortcuts:
             if config.whitelist.isEmpty {
                 editWhitelist()
             }
@@ -371,6 +404,7 @@ extension AppDelegate: StatusMenuDelegate {
     }
 
     func beginCalibration() {
+        shortcuts.cancel()
         maskController.beginCalibration()
     }
 

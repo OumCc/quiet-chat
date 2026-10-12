@@ -50,6 +50,20 @@ final class RefreshDriver: NSObject {
         fallbackTimer = timer
     }
 
+    /** 与 start 成对调用，应用退出时移除事件监听和刷新任务。 */
+    func stop() {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        mouseMonitor = nil
+        displayLink?.invalidate()
+        displayLink = nil
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+        stopFrameRefreshTimer?.invalidate()
+        stopFrameRefreshTimer = nil
+    }
+
     @objc private func fire() {
         refresh()
     }

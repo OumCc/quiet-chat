@@ -11,6 +11,15 @@ final class AccessibilityPermission: NSObject {
 
     var isGranted: Bool { AXIsProcessTrusted() }
 
+    /** 键盘合成访问独立核对，不申请录屏或输入监听权限。 */
+    var canPostEvents: Bool { CGPreflightPostEventAccess() }
+
+    /** 引导快捷操作需要的辅助功能与事件合成访问；安全开关仍由用户操作。 */
+    func requestShortcutAccess() {
+        request()
+        if !canPostEvents { _ = CGRequestPostEventAccess() }
+    }
+
     /// 弹出系统授权提示，并把本应用加入「辅助功能」列表；系统只在第一次调用时弹窗。
     func request() {
         // 直接写键名：kAXTrustedCheckOptionPrompt 在 Swift 6 下是非并发安全的全局变量

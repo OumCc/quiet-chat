@@ -1,5 +1,5 @@
 // 白名单编辑窗口：每行填一个聊天名称，保存时整理后交给调用方写入配置。
-// 只在精准遮挡且已解锁时由菜单打开；进入锁定或切回整块遮挡时，调用方用 close() 关掉它，未保存的修改丢弃。
+// 只在快捷入口方式且已解锁时由菜单打开；进入锁定或切回整块遮挡时，调用方用 close() 关掉它，未保存的修改丢弃。
 // 名称是用户填写的聊天名，不写入日志。
 
 import AppKit
@@ -57,7 +57,7 @@ private struct WhitelistEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("每行填一个聊天名称，与聊天列表里显示的一致，有备注就填备注。名称太长被截断也没关系。")
+            Text("每行填写完整搜索名称，有备注请填完整备注。普通聊天需能通过搜索回车直接打开；文件传输助手填词后请手动点击微信「功能」卡片。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

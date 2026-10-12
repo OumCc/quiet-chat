@@ -15,7 +15,7 @@ struct AppConfigTests {
     /// 所有字段都有值的配置，用来检查读写和 schema 一致性。
     private let fullConfig = AppConfig(
         listColumn: ListColumnLayout(leftInset: 70, topInset: 12, width: 300),
-        maskMode: .precise,
+        maskMode: .shortcuts,
         whitelist: ["文件传输助手", "滴答清单"],
         preciseListColumn: ListColumnLayout(leftInset: 70, topInset: 0, width: 300),
         password: PasswordRecord(iterations: 100_000, salt: "c2FsdA==", hash: "aGFzaA=="),
@@ -26,6 +26,32 @@ struct AppConfigTests {
         let store = temporaryStore()
         try store.save(fullConfig)
         #expect(try store.load() == fullConfig)
+    }
+
+    @Test func legacyPrecisePreservesAllFieldsAndMigratesOnSave() throws {
+        let store = temporaryStore()
+        var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        legacy["maskMode"] = "precise"
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        try FileManager.default.createDirectory(at: store.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try legacyData.write(to: store.fileURL)
+
+        let loaded = try store.load()
+        #expect(loaded == fullConfig)
+        #expect(try Data(contentsOf: store.fileURL) == legacyData)
+        try store.save(loaded)
+        let saved = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
+        #expect(saved["maskMode"] as? String == "shortcuts")
+        #expect(saved["schemaVersion"] as? Int == 1)
+        #expect(try store.load() == fullConfig)
+    }
+
+    @Test(arguments: [MaskMode.full, .shortcuts])
+    func maskModeRoundTripsWithEmptyWhitelist(_ mode: MaskMode) throws {
+        let store = temporaryStore()
+        let config = AppConfig(maskMode: mode)
+        try store.save(config)
+        #expect(try store.load() == config)
     }
 
     @Test func missingFieldsFallBackToDefaultsAndUnknownFieldsAreIgnored() throws {
@@ -63,13 +89,13 @@ struct AppConfigTests {
         #expect(AppConfig.default.appearanceMode == .system)
         let legacy = #"{"schemaVersion": 1, "maskMode": "precise", "whitelist": ["文件传输助手"], "hidePasswordInput": true}"#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(legacy.utf8))
-        #expect(config == AppConfig(maskMode: .precise, whitelist: ["文件传输助手"], hidePasswordInput: true))
+        #expect(config == AppConfig(maskMode: .shortcuts, whitelist: ["文件传输助手"], hidePasswordInput: true))
     }
 
     @Test func unknownAppearanceModeFallsBackToSystem() throws {
         let json = #"{"appearanceMode": "sepia", "maskMode": "precise", "hidePasswordInput": true}"#
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(config == AppConfig(maskMode: .precise, hidePasswordInput: true))
+        #expect(config == AppConfig(maskMode: .shortcuts, hidePasswordInput: true))
     }
 
     @Test(arguments: [AppearanceMode.system, .light, .dark])
@@ -81,21 +107,21 @@ struct AppConfigTests {
         #expect(try store.load() == config)
     }
 
-    /// 精准遮挡没有校准过时，沿用整块遮挡的左边距和宽度，上边距为 0；校准后两种方式各用各的。
-    @Test func preciseLayoutIsDerivedUntilCalibrated() {
+    /// 快捷入口方式没有校准过时，沿用整块遮挡的左边距和宽度，上边距为 0；校准后两种方式各用各的。
+    @Test func shortcutLayoutIsDerivedUntilCalibrated() {
         let fullLayout = ListColumnLayout(leftInset: 60, topInset: 246, width: 242)
         var config = AppConfig(listColumn: fullLayout)
         #expect(config.listColumnLayout(for: .full) == fullLayout)
-        #expect(config.listColumnLayout(for: .precise) == ListColumnLayout(leftInset: 60, topInset: 0, width: 242))
+        #expect(config.listColumnLayout(for: .shortcuts) == ListColumnLayout(leftInset: 60, topInset: 0, width: 242))
 
         let preciseLayout = ListColumnLayout(leftInset: 58, topInset: 40, width: 250)
         config.preciseListColumn = preciseLayout
-        #expect(config.listColumnLayout(for: .precise) == preciseLayout)
+        #expect(config.listColumnLayout(for: .shortcuts) == preciseLayout)
         #expect(config.listColumnLayout(for: .full) == fullLayout)
     }
 
-    /// 遮挡方式和白名单总是写出；没有校准过的精准遮挡布局不写出，读回来仍然按整块遮挡的布局推导。
-    @Test func uncalibratedPreciseLayoutIsNotWritten() throws {
+    /// 遮挡方式和白名单总是写出；没有校准过的快捷入口方式布局不写出，读回来仍然按整块遮挡的布局推导。
+    @Test func uncalibratedShortcutLayoutIsNotWritten() throws {
         let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.default)) as? [String: Any])
         #expect(encoded["maskMode"] as? String == "full")
         #expect(encoded["whitelist"] as? [String] == [])
@@ -123,6 +149,9 @@ struct AppConfigTests {
         let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
         try expectSameFields(schema: schema, value: encoded, path: "$")
         let properties = try #require(schema["properties"] as? [String: Any])
+        let maskMode = try #require(properties["maskMode"] as? [String: Any])
+        #expect(maskMode["enum"] as? [String] == [MaskMode.full.rawValue, MaskMode.shortcuts.rawValue, "precise"])
+        #expect(maskMode["default"] as? String == MaskMode.full.rawValue)
         let appearance = try #require(properties["appearanceMode"] as? [String: Any])
         #expect(appearance["enum"] as? [String] == [AppearanceMode.system, .light, .dark].map(\.rawValue))
         #expect(appearance["default"] as? String == AppearanceMode.system.rawValue)

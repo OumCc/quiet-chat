@@ -16,12 +16,11 @@ protocol StatusMenuDelegate: AnyObject {
     var maskMode: MaskMode { get }
     /** 用户选择的外观偏好；跟随系统时也保持该选项勾选。 */
     var appearanceMode: AppearanceMode { get }
-    /// 精准遮挡且已解锁时才能编辑白名单。
+    /** 快捷入口方式且已解锁时才能编辑白名单。 */
     var canEditWhitelist: Bool { get }
-    /// 选了精准遮挡，但没有屏幕录制权限或读取画面失败。
-    var needsScreenRecordingPermission: Bool { get }
+    /** 菜单接管输入时停止未完成搜索，不改变锁定状态或方式。 */
+    func prepareToOpenStatusMenu()
     func requestAccessibilityPermission()
-    func requestScreenRecordingPermission()
     func selectMaskMode(_ mode: MaskMode)
     /** 切换整个应用的外观并保存偏好，锁定时也可调用。 */
     func selectAppearanceMode(_ mode: AppearanceMode)
@@ -66,9 +65,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if delegate.needsAccessibilityPermission {
             menu.addItem(makeItem("授予辅助功能权限…", #selector(requestPermission)))
         }
-        if delegate.needsScreenRecordingPermission {
-            menu.addItem(makeItem("授予屏幕录制权限…", #selector(requestScreenRecordingPermission)))
-        }
 
         menu.addItem(.separator())
         let unlocked = !delegate.isLocked
@@ -91,9 +87,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let fullMask = makeItem("整块遮挡", #selector(selectFullMask))
         fullMask.state = delegate.maskMode == .full ? .on : .off
         menu.addItem(fullMask)
-        let preciseMask = makeItem("精准遮挡（只露出白名单）", #selector(selectPreciseMask))
-        preciseMask.state = delegate.maskMode == .precise ? .on : .off
-        menu.addItem(preciseMask)
+        let shortcutMask = makeItem("白名单快捷入口", #selector(selectShortcutMask))
+        shortcutMask.state = delegate.maskMode == .shortcuts ? .on : .off
+        menu.addItem(shortcutMask)
         let whitelist = makeItem("编辑白名单…", #selector(editWhitelist))
         whitelist.isEnabled = delegate.canEditWhitelist
         menu.addItem(whitelist)
@@ -119,6 +115,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "退出 QuietChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        delegate?.prepareToOpenStatusMenu()
+    }
+
     private func makeItem(_ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
@@ -132,9 +132,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func requestPermission() { delegate?.requestAccessibilityPermission() }
-    @objc private func requestScreenRecordingPermission() { delegate?.requestScreenRecordingPermission() }
     @objc private func selectFullMask() { delegate?.selectMaskMode(.full) }
-    @objc private func selectPreciseMask() { delegate?.selectMaskMode(.precise) }
+    @objc private func selectShortcutMask() { delegate?.selectMaskMode(.shortcuts) }
     @objc private func selectSystemAppearance() { delegate?.selectAppearanceMode(.system) }
     @objc private func selectLightAppearance() { delegate?.selectAppearanceMode(.light) }
     @objc private func selectDarkAppearance() { delegate?.selectAppearanceMode(.dark) }

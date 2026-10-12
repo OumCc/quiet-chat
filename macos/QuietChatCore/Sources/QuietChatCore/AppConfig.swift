@@ -4,16 +4,17 @@
 
 import Foundation
 
-/// 锁定时的遮挡方式。只决定遮住哪里，解锁、自动锁定等规则在两种方式下相同。
+/** 锁定时的遮挡方式；两种方式共用解锁和自动锁定规则。 */
 public enum MaskMode: String, Codable, Sendable {
     /// 整块遮住聊天列表栏。
     case full
-    /// 只露出白名单聊天所在的行，其余照旧遮住。
-    case precise
+    /** 不透明遮罩上的静态白名单快捷入口。 */
+    case shortcuts
 
-    // 未知取值（例如更新的版本写出的新方式）按整块遮挡处理：宁可多遮
+    /** 旧 precise 映射到快捷入口；未知字符串回退整块遮挡，编码只输出当前方式。 */
     public init(from decoder: any Decoder) throws {
-        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .full
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = value == "precise" ? .shortcuts : Self(rawValue: value) ?? .full
     }
 }
 
@@ -42,9 +43,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var listColumn: ListColumnLayout
     /// 遮挡方式；默认整块遮挡。
     public var maskMode: MaskMode
-    /// 精准遮挡要露出的聊天名称，保存前由 `ChatWhitelist.normalized` 整理；只在精准遮挡下起作用。
+    /** 快捷入口的完整搜索名称，保存前由 `ChatWhitelist.normalized` 整理。 */
     public var whitelist: [String]
-    /// 精准遮挡下聊天列表栏的位置（校准结果）；nil 表示还没有在精准遮挡下校准过，见 `listColumnLayout(for:)`。
+    /** 快捷入口方式的独立校准；保留历史键名，nil 时由整块遮挡布局推导。 */
     public var preciseListColumn: ListColumnLayout?
     /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
     public var password: PasswordRecord?
@@ -82,15 +83,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
         appearanceMode = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode) ?? .system
     }
 
-    /// 指定遮挡方式使用的列表栏布局。
-    ///
-    /// 精准遮挡还没有校准过时，沿用整块遮挡的左边距和宽度，上边距取 0：
-    /// 整块遮挡的上边距可能被用来露出顶部的聊天，精准遮挡照搬的话会露出没有识别过的行。
+    /** 指定方式的布局；快捷入口未校准时沿用整块遮挡左右边界，上边距取 0 以遮住整个列表。 */
     public func listColumnLayout(for mode: MaskMode) -> ListColumnLayout {
         switch mode {
         case .full:
             listColumn
-        case .precise:
+        case .shortcuts:
             preciseListColumn ?? ListColumnLayout(leftInset: listColumn.leftInset, topInset: 0, width: listColumn.width)
         }
     }

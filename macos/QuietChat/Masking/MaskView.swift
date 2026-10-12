@@ -1,7 +1,8 @@
 // 遮罩内容。
-// - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域，以及精准遮挡露出的白名单行）保持全透明，
+// 快捷入口按配置顺序固定显示，独立滚动；按钮和反馈区与洞相交时隐藏，不自行发送系统事件。
+// - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域）保持全透明，
 //   点击会穿透到下面的窗口。密码框压到洞上时暂时隐藏，免得画到别的窗口上。
-//   密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；整块遮挡时它在中间，精准遮挡时在底部始终遮住的一条里；
+//   密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；整块遮挡时它在中间，快捷入口时在底部 56 pt 密码区域；
 // - 校准模式：半透明蓝色，可拖动左、右、上三条边；中间的不透明卡片承载提示和完成 / 恢复默认 / 取消按钮。
 // 视图坐标系翻转（原点在左上、y 向下），与 Quartz 方向一致，洞的坐标可以直接使用。
 
@@ -17,7 +18,7 @@ final class MaskView: NSView {
     enum LockControlsPlacement: Equatable {
         /// 整块遮挡：垂直居中，上方有一行提示文字。
         case centered
-        /// 精准遮挡：在底部高 `height` 的一条里垂直居中，这一条始终遮住；不画提示文字，中间留给露出的行。
+        /// 快捷入口：在底部高 `height` 的区域垂直居中，上方放静态按钮及操作反馈。
         case bottomStrip(height: CGFloat)
     }
 
@@ -30,6 +31,8 @@ final class MaskView: NSView {
             guard style != oldValue else { return }
             calibrationCard.isHidden = style != .calibration
             updateLockControlsVisibility()
+            updateShortcutVisibility()
+            needsLayout = true
             needsDisplay = true
         }
     }
@@ -39,6 +42,7 @@ final class MaskView: NSView {
         didSet {
             guard holes != oldValue else { return }
             updateLockControlsVisibility()
+            updateShortcutVisibility()
             needsDisplay = true
         }
     }
@@ -60,8 +64,39 @@ final class MaskView: NSView {
 
     /// 在密码框里按了回车。
     var onPasswordSubmit: ((String) -> Void)?
+    /** 用户点击密码框时先停止未结束的搜索，再接管键盘；不传递输入内容。 */
+    var onPasswordFocus: (() -> Void)?
     /// 用户点了密码框右侧的按钮；参数为切换后的"是否隐藏输入"。
     var onPasswordVisibilityChange: ((Bool) -> Void)?
+    /** 名单保持配置顺序；显示可截断，点击回调始终携带完整字符串。 */
+    var shortcutNames: [String] = [] {
+        didSet {
+            if shortcutNames != oldValue { rebuildShortcutButtons() }
+        }
+    }
+    /** 仅在锁定的快捷入口方式显示，由控制器按生命周期设置。 */
+    var showsShortcuts = false {
+        didSet {
+            if showsShortcuts != oldValue {
+                updateShortcutVisibility()
+                needsLayout = true
+            }
+        }
+    }
+    /** 操作期间禁用全部快捷按钮，密码控件保持可用。 */
+    var shortcutBusy = false {
+        didSet { if shortcutBusy != oldValue { updateShortcutButtonsEnabled() } }
+    }
+    /** 简短操作反馈，不包含普通聊天名称或打开成功断言。 */
+    var shortcutMessage: String? {
+        didSet {
+            guard shortcutMessage != oldValue else { return }
+            shortcutFeedback.stringValue = shortcutMessage ?? ""
+            needsLayout = true
+        }
+    }
+    /** 用户主动点击快捷入口；本视图不发送键盘事件。 */
+    var onShortcut: ((String) -> Void)?
     /// 校准时拖动了边缘：参数为按拖动量调整后的面板外框（Cocoa 全局坐标），由控制器限制范围后回写。
     var onEdgeDrag: ((NSRect) -> Void)?
     var onFinishCalibration: (() -> Void)?
@@ -80,6 +115,10 @@ final class MaskView: NSView {
     private let securePasswordField = FirstMouseSecureTextField()
     private let passwordVisibilityButton = FirstMouseButton()
     private let passwordError = NSTextField(labelWithString: "密码不对，再试一次")
+    private let shortcutScroll = NSScrollView()
+    private let shortcutDocument = FlippedShortcutDocument()
+    private var shortcutButtons: [NSButton] = []
+    private let shortcutFeedback = NSTextField(wrappingLabelWithString: "")
     // 密码框的两种纵向位置，同一时间只启用一个
     private var centeredConstraint: NSLayoutConstraint?
     private var bottomStripConstraint: NSLayoutConstraint?
@@ -92,6 +131,7 @@ final class MaskView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setUpLockControls()
+        setUpShortcutControls()
         setUpCalibrationControls()
     }
 
@@ -112,10 +152,13 @@ final class MaskView: NSView {
         for view in calibrationControls.arrangedSubviews {
             view.needsDisplay = true
         }
+        for button in shortcutButtons { button.needsDisplay = true }
+        shortcutFeedback.needsDisplay = true
     }
 
     override func layout() {
         super.layout()
+        layoutShortcutControls()
         updateLockControlsVisibility()
     }
 
@@ -226,6 +269,83 @@ final class MaskView: NSView {
         window?.makeFirstResponder(nil)
     }
 
+    /** 交接键盘焦点时结束编辑但保留密码草稿，不触发提交。 */
+    func releaseInputFocus() {
+        window?.makeFirstResponder(nil)
+    }
+
+    // MARK: - 静态快捷入口
+
+    private func setUpShortcutControls() {
+        shortcutScroll.drawsBackground = false
+        shortcutScroll.contentView.drawsBackground = false
+        shortcutScroll.hasVerticalScroller = true
+        shortcutScroll.hasHorizontalScroller = false
+        shortcutScroll.autohidesScrollers = true
+        shortcutScroll.borderType = .noBorder
+        shortcutScroll.documentView = shortcutDocument
+        shortcutScroll.isHidden = true
+        addSubview(shortcutScroll)
+        shortcutFeedback.font = .systemFont(ofSize: 11)
+        shortcutFeedback.textColor = .secondaryLabelColor
+        shortcutFeedback.alignment = .center
+        shortcutFeedback.isHidden = true
+        addSubview(shortcutFeedback)
+    }
+
+    private func rebuildShortcutButtons() {
+        for button in shortcutButtons { button.removeFromSuperview() }
+        shortcutButtons = shortcutNames.enumerated().map { index, name in
+            let button = FirstMouseButton(title: name, target: self, action: #selector(openShortcut(_:)))
+            button.setButtonType(.momentaryPushIn)
+            button.bezelStyle = .rounded
+            button.alignment = .left
+            button.cell?.lineBreakMode = .byTruncatingTail
+            button.toolTip = name
+            button.tag = index
+            shortcutDocument.addSubview(button)
+            return button
+        }
+        shortcutScroll.contentView.scroll(to: .zero)
+        updateShortcutButtonsEnabled()
+        needsLayout = true
+    }
+
+    private func layoutShortcutControls() {
+        let feedbackHeight: CGFloat = shortcutMessage == nil ? 0 : 44
+        let height = max(0, bounds.height - 56 - feedbackHeight - 16)
+        shortcutScroll.frame = NSRect(x: 8, y: 8, width: max(0, bounds.width - 16), height: height)
+        let width = shortcutScroll.contentSize.width
+        shortcutDocument.frame = NSRect(x: 0, y: 0, width: width,
+                                        height: max(shortcutScroll.contentSize.height, CGFloat(shortcutButtons.count) * 38))
+        for (index, button) in shortcutButtons.enumerated() {
+            button.frame = NSRect(x: 0, y: CGFloat(index) * 38, width: width, height: 32)
+        }
+        shortcutFeedback.frame = NSRect(x: 8, y: max(8, bounds.height - 56 - feedbackHeight),
+                                        width: max(0, bounds.width - 16), height: feedbackHeight)
+        updateShortcutVisibility()
+    }
+
+    private func updateShortcutButtonsEnabled() {
+        for button in shortcutButtons { button.isEnabled = !shortcutBusy && !shortcutScroll.isHidden }
+    }
+
+    private func updateShortcutVisibility() {
+        let canShow = showsShortcuts && style == .mask
+        // 保守让出整个相交容器，避免滚动视图或控件填回透明洞、截获上层窗口点击。
+        shortcutScroll.isHidden = !canShow || shortcutButtons.isEmpty
+            || holes.contains { $0.intersects(shortcutScroll.frame) }
+        shortcutFeedback.isHidden = !canShow || shortcutMessage == nil
+            || holes.contains { $0.intersects(shortcutFeedback.frame) }
+        updateShortcutButtonsEnabled()
+    }
+
+    @objc private func openShortcut(_ sender: NSButton) {
+        guard showsShortcuts, style == .mask, !shortcutBusy, !shortcutScroll.isHidden,
+              shortcutNames.indices.contains(sender.tag) else { return }
+        onShortcut?(shortcutNames[sender.tag])
+    }
+
     private var passwordFields: [NSTextField] { [plainPasswordField, securePasswordField] }
 
     private func clearPasswordFields() {
@@ -235,6 +355,8 @@ final class MaskView: NSView {
     }
 
     private func setUpLockControls() {
+        plainPasswordField.onFocus = { [weak self] in self?.onPasswordFocus?() }
+        securePasswordField.onFocus = { [weak self] in self?.onPasswordFocus?() }
         for field in passwordFields {
             field.placeholderString = "输入密码解锁"
             field.alignment = .center
@@ -479,15 +601,34 @@ private final class FirstMouseButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// 按钮文档从上往下布局；背景透明，不填充窗口避让的洞。
+private final class FlippedShortcutDocument: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// 第一次点击就开始输入的隐藏输入框。系统会为它开启安全输入，中文输入法自动停用。
 private final class FirstMouseSecureTextField: NSSecureTextField {
+    var onFocus: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocus?()
+        window?.makeKey()
+        super.mouseDown(with: event)
+    }
 }
 
 /// 第一次点击就开始输入的明文密码框。
 /// 明文框没有安全输入，中文输入法会把字母拼成候选词，所以获得焦点时只允许英文输入法。
 private final class FirstMouseRomanTextField: NSTextField {
+    var onFocus: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocus?()
+        window?.makeKey()
+        super.mouseDown(with: event)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()

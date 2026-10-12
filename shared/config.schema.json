@@ -35,13 +35,13 @@
       }
     },
     "maskMode": {
-      "description": "锁定时的遮挡方式：full 整块遮住聊天列表栏；precise 只露出白名单聊天所在的行。读取时遇到未知取值按 full 处理。",
+      "description": "锁定时的遮挡方式：full 整块遮住聊天列表栏；shortcuts 在不透明遮罩上显示静态白名单快捷入口。precise 仅兼容旧配置输入，读取为 shortcuts，后续保存输出 shortcuts；未知值按 full 处理。",
       "type": "string",
-      "enum": ["full", "precise"],
+      "enum": ["full", "shortcuts", "precise"],
       "default": "full"
     },
     "whitelist": {
-      "description": "精准遮挡要露出的聊天名称，与聊天列表里显示的一致（有备注就填备注）。保存前去掉每项首尾的空白，并丢弃空项和重复项。只在 maskMode 为 precise 时起作用。",
+      "description": "快捷入口的完整搜索名称（有备注就填完整备注）。保存前去掉首尾空白，丢弃空项和重复项；保留顺序、内部空格、表情及标点。只在 maskMode 为 shortcuts 时起作用。",
       "type": "array",
       "items": {
         "type": "string"
@@ -49,7 +49,7 @@
       "default": []
     },
     "preciseListColumn": {
-      "description": "精准遮挡下聊天列表栏的位置，结构同 listColumn，在精准遮挡下校准后才写入。缺失表示还没有校准过：沿用 listColumn 的 leftInset 和 width，topInset 取 0。",
+      "description": "快捷入口方式的独立校准，保留 preciseListColumn 历史键名，结构同 listColumn，校准后才写入。缺失时沿用 listColumn 的 leftInset 和 width，topInset 取 0。",
       "type": "object",
       "properties": {
         "leftInset": {
