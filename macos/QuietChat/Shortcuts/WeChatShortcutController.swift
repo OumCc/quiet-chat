@@ -4,7 +4,7 @@ import AppKit
 import ApplicationServices
 import QuietChatCore
 
-/** 使用已通过本机门禁的时序；执行结束仅说明指令已发出，不确认聊天身份。 */
+/** 执行可取消的键盘搜索；提速时序待本机实测，执行结束仅说明指令已发出，不确认聊天身份。 */
 @MainActor
 final class WeChatShortcutController {
     enum OperationError: String, Error {
@@ -122,7 +122,7 @@ final class WeChatShortcutController {
 
     private func execute(name: String, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
                  mayContinue: () -> Bool) async throws -> String? {
-        // 微信 4.1.13 / macOS 26.5 门禁参数；等待不能当作搜索控件就绪或聊天身份回执。
+        // 首轮提速参数待本机实测；等待不能当作搜索控件就绪或聊天身份回执。
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw OperationError.permissionMissing }
         record(stage: "focusing")
         try await tracker.focusMainWindow(target, mayContinue: mayContinue)
@@ -130,14 +130,14 @@ final class WeChatShortcutController {
         hasConfirmedFocus = true
         record(stage: "opening-search")
         try post(key: 3, flags: .maskCommand, tracker: tracker, target: target, mayContinue: mayContinue)
-        try await wait(.milliseconds(500), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(150), tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "selecting-old-query")
         try post(key: 0, flags: .maskCommand, tracker: tracker, target: target, mayContinue: mayContinue)
-        try await wait(.milliseconds(100), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(50), tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "entering-name")
         try post(text: name, tracker: tracker, target: target, mayContinue: mayContinue)
         record(stage: "awaiting-results")
-        try await wait(.seconds(1), tracker: tracker, target: target, mayContinue: mayContinue)
+        try await wait(.milliseconds(500), tracker: tracker, target: target, mayContinue: mayContinue)
         if name == "文件传输助手" {
             record(stage: "manual-selection")
             return "请在微信点击『功能』中的文件传输助手"
