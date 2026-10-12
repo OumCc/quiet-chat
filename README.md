@@ -99,6 +99,12 @@ open macos/build/Build/Products/Debug/QuietChat.app
 
 然后按[首次使用](#首次使用)的步骤授权和校准。
 
+### 应用版本
+
+根目录的 [Version.xcconfig](Version.xcconfig) 是 macOS 应用版本的统一来源。升级时修改其中的 `MARKETING_VERSION`，本地 Debug、Release 和 GitHub Actions 构建都会使用该值，菜单显示当前应用包里的版本。
+
+发布时推送对应的 `v<版本号>` tag，例如 `v0.1.0`；tag 与文件版本不一致时，发布流程会报错停止。手动触发构建也使用文件版本，构建号继续由 GitHub Actions 运行编号提供。
+
 ### 重新编译后授权失效？
 
 默认使用本机临时签名。每次重新编译签名都会变，系统会把它当成新应用，辅助功能和键盘合成访问可能随之失效。

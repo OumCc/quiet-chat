@@ -1,4 +1,4 @@
-// 菜单栏图标与菜单：显示锁定状态，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、分阶段速度、外观、开机自启动和退出。
+// 菜单栏图标与菜单：显示锁定状态和应用版本，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、分阶段速度、外观、开机自启动和退出。
 // 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
 // 恢复默认密码、切换遮挡方式、外观和开机自启动不受锁定限制。
 
@@ -167,6 +167,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(launchAtLogin)
 
         menu.addItem(.separator())
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+        menu.addItem(makeDisabledItem("当前版本：\(version)"))
         menu.addItem(NSMenuItem(title: "退出 QuietChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 

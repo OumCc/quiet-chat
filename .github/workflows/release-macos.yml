@@ -21,10 +21,14 @@ jobs:
       - name: 确定版本号
         id: version
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          VERSION="$(sed -n 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*//p' Version.xcconfig)"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Version.xcconfig 未设置 MARKETING_VERSION"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::发布 tag $GITHUB_REF_NAME 与 Version.xcconfig 中的版本 $VERSION 不一致"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           xcodebuild -version
@@ -45,7 +49,6 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM= \
-            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             build
           APP=build/Build/Products/Release/QuietChat.app
