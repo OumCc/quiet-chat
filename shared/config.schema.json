@@ -49,32 +49,38 @@
       "default": []
     },
     "shortcutTiming": {
-      "description": "快捷入口分阶段试验等待，单位为整数毫秒；只影响后续主动点击，保存后重启沿用。缺失或无效对象回退基准，单段缺失、类型错误或越界只回退该段。零值不跳过权限、焦点与取消校验；总和不表示真实聊天打开耗时。",
+      "description": "白名单快捷入口的三段固定等待，单位为整数毫秒；默认全零，只影响后续主动点击，保存后重启沿用。速度版本有效时，缺失或无效对象回退全零，单段缺失、类型错误或越界只将该段归零。零值不跳过权限、焦点与取消校验；总和不表示真实聊天打开耗时。",
       "type": "object",
-      "default": { "searchOpenMs": 150, "selectAllMs": 50, "resultsMs": 500 },
+      "default": { "searchOpenMs": 0, "selectAllMs": 0, "resultsMs": 0 },
       "properties": {
         "searchOpenMs": {
-          "description": "打开搜索后等待；无效值回退 150。",
+          "description": "打开搜索后等待；默认及无效值回退均为 0。",
           "type": "integer",
           "minimum": 0,
           "maximum": 150,
-          "default": 150
+          "default": 0
         },
         "selectAllMs": {
-          "description": "全选旧搜索词后等待；无效值回退 50。",
+          "description": "全选旧搜索词后等待；默认及无效值回退均为 0。",
           "type": "integer",
           "minimum": 0,
           "maximum": 50,
-          "default": 50
+          "default": 0
         },
         "resultsMs": {
-          "description": "输入名称后等待；无效值回退 500。",
+          "description": "输入名称后等待搜索结果；默认及无效值回退均为 0。",
           "type": "integer",
           "minimum": 0,
           "maximum": 500,
-          "default": 500
+          "default": 0
         }
       }
+    },
+    "shortcutTimingVersion": {
+      "description": "常规速度配置标记。缺失、类型错误或不为 1 时，旧速度整组归零；读取不改写文件，正常保存写入 1，此后沿用用户选择。配置总版本仍为 1。",
+      "type": "integer",
+      "const": 1,
+      "default": 1
     },
     "preciseListColumn": {
       "description": "快捷入口方式的独立校准，保留 preciseListColumn 历史键名，结构同 listColumn，校准后才写入。缺失时沿用 listColumn 的 leftInset 和 width，topInset 取 0。",

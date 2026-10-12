@@ -123,7 +123,7 @@ final class WeChatShortcutController {
 
     private func execute(name: String, timing: ShortcutTiming, tracker: WeChatWindowTracker, target: WeChatWindowTracker.ShortcutTarget,
                  mayContinue: () -> Bool) async throws -> String? {
-        // 按本次快照使用试验时序；等待不能当作搜索控件就绪或聊天身份回执。
+        // 按本次快照使用分阶段时序；等待不能当作搜索控件就绪或聊天身份回执。
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw OperationError.permissionMissing }
         record(stage: "focusing")
         try await tracker.focusMainWindow(target, mayContinue: mayContinue)

@@ -36,7 +36,7 @@ protocol StatusMenuDelegate: AnyObject {
     func toggleLaunchAtLogin()
 }
 
-/** 重建状态菜单与时序试验入口；参数选择交给 delegate，搜索始终由白名单按钮发起。 */
+/** 重建状态菜单与响应速度入口；参数选择交给 delegate，搜索始终由白名单按钮发起。 */
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -49,12 +49,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             switch self {
             case .searchOpen: "打开搜索"
             case .selectAll: "全选旧搜索词"
-            case .results: "等待搜索结果"
+            case .results: "等待搜到结果"
             }
         }
 
-        var maximum: Int { value(in: .baseline) }
-        var presets: [Int] { [maximum, maximum / 2, maximum / 4, maximum / 8, maximum / 16, 0] }
+        var maximum: Int {
+            switch self {
+            case .searchOpen: ShortcutTiming.searchOpenRange.upperBound
+            case .selectAll: ShortcutTiming.selectAllRange.upperBound
+            case .results: ShortcutTiming.resultsRange.upperBound
+            }
+        }
+
+        var presets: [Int] {
+            switch self {
+            case .searchOpen: [0, 75]
+            case .selectAll: [0, 25]
+            case .results: [0, 250]
+            }
+        }
 
         func value(in timing: ShortcutTiming) -> Int {
             switch self {
@@ -162,7 +175,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func makeShortcutTimingItem(_ timing: ShortcutTiming) -> NSMenuItem {
-        let item = NSMenuItem(title: "快捷入口速度（测试）", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: "白名单快捷入口响应速度", action: nil, keyEquivalent: "")
         let menu = NSMenu(title: item.title)
         menu.autoenablesItems = false
         menu.addItem(makeDisabledItem("固定等待合计：\(timing.totalMs) 毫秒"))
@@ -173,7 +186,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             let stageMenu = NSMenu(title: stage.title)
             stageMenu.autoenablesItems = false
             for milliseconds in stage.presets {
-                let suffix = milliseconds == stage.maximum ? "（基准）" : milliseconds == 0 ? "（零等待）" : ""
+                let suffix = milliseconds == stage.value(in: .baseline) ? "（基准）" : ""
                 let preset = makeItem("\(milliseconds) 毫秒\(suffix)", #selector(selectTimingPreset(_:)))
                 preset.tag = stage.rawValue
                 preset.representedObject = milliseconds
@@ -190,7 +203,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(stageItem)
         }
         menu.addItem(.separator())
-        menu.addItem(makeItem("恢复基准（700 毫秒）", #selector(restoreTimingBaseline)))
+        menu.addItem(makeItem("恢复基准（\(ShortcutTiming.baseline.totalMs) 毫秒）", #selector(restoreTimingBaseline)))
         item.submenu = menu
         return item
     }

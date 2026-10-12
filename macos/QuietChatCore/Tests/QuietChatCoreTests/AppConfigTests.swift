@@ -12,6 +12,12 @@ struct AppConfigTests {
         #expect(try temporaryStore().load() == .default)
     }
 
+    @Test func shortcutTimingDefaultsToZeroWithCurrentVersion() {
+        #expect(AppConfig.default.shortcutTiming == ShortcutTiming(searchOpenMs: 0, selectAllMs: 0, resultsMs: 0))
+        #expect(AppConfig.default.shortcutTimingVersion == 1)
+        #expect(AppConfig.default.schemaVersion == 1)
+    }
+
     /// 所有字段都有值的配置，用来检查读写和 schema 一致性。
     private let fullConfig = AppConfig(
         listColumn: ListColumnLayout(leftInset: 70, topInset: 12, width: 300),
@@ -33,6 +39,7 @@ struct AppConfigTests {
         let store = temporaryStore()
         var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
         legacy.removeValue(forKey: "shortcutTiming")
+        legacy.removeValue(forKey: "shortcutTimingVersion")
         let originalData = try JSONSerialization.data(withJSONObject: legacy)
         try FileManager.default.createDirectory(at: store.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try originalData.write(to: store.fileURL)
@@ -42,6 +49,65 @@ struct AppConfigTests {
         #expect(try store.load() == expected)
         #expect(try Data(contentsOf: store.fileURL) == originalData)
         #expect(expected.schemaVersion == 1)
+    }
+
+    @Test(arguments: [
+        ShortcutTiming(searchOpenMs: 150, selectAllMs: 50, resultsMs: 500),
+        ShortcutTiming(searchOpenMs: 75, selectAllMs: 25, resultsMs: 250),
+        ShortcutTiming(searchOpenMs: 56, selectAllMs: 12, resultsMs: 125),
+    ])
+    func legacyTimingResetsWithoutRewritingFile(_ timing: ShortcutTiming) throws {
+        let store = temporaryStore()
+        var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        legacy.removeValue(forKey: "shortcutTimingVersion")
+        legacy["shortcutTiming"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(timing))
+        let originalData = try JSONSerialization.data(withJSONObject: legacy)
+        try FileManager.default.createDirectory(at: store.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try originalData.write(to: store.fileURL)
+
+        var expected = fullConfig
+        expected.shortcutTiming = .baseline
+        #expect(try store.load() == expected)
+        #expect(try Data(contentsOf: store.fileURL) == originalData)
+        #expect(expected.shortcutTimingVersion == 1)
+        #expect(expected.schemaVersion == 1)
+    }
+
+    @Test(arguments: ["0", "2", "-1", "1.5", "true", "null", "\"1\"", "[]", "{}", "1e100"])
+    func invalidTimingVersionResetsAllStages(_ invalid: String) throws {
+        var values = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        values["shortcutTimingVersion"] = try JSONSerialization.jsonObject(with: Data(invalid.utf8), options: [.fragmentsAllowed])
+        var expected = fullConfig
+        expected.shortcutTiming = .baseline
+        #expect(try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: values)) == expected)
+    }
+
+    @Test func migratedTimingChoiceSurvivesSaveAndReload() throws {
+        let store = temporaryStore()
+        var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        legacy.removeValue(forKey: "shortcutTimingVersion")
+        try FileManager.default.createDirectory(at: store.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: legacy).write(to: store.fileURL)
+
+        var loaded = try store.load()
+        #expect(loaded.shortcutTiming == .baseline)
+        loaded.shortcutTiming = ShortcutTiming(searchOpenMs: 75, selectAllMs: 25, resultsMs: 250)
+        try store.save(loaded)
+
+        let saved = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL)) as? [String: Any])
+        #expect(saved["shortcutTimingVersion"] as? Int == 1)
+        #expect(saved["schemaVersion"] as? Int == 1)
+        var expected = fullConfig
+        expected.shortcutTiming = loaded.shortcutTiming
+        #expect(try store.load() == expected)
+    }
+
+    @Test func currentTimingFieldsFallBackIndependently() throws {
+        var values = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fullConfig)) as? [String: Any])
+        values["shortcutTiming"] = ["searchOpenMs": -1, "selectAllMs": 25]
+        var expected = fullConfig
+        expected.shortcutTiming = ShortcutTiming(searchOpenMs: 0, selectAllMs: 25, resultsMs: 0)
+        #expect(try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: values)) == expected)
     }
 
     @Test(arguments: ["null", "false", "\"fast\"", "[]", "123"])
@@ -203,14 +269,19 @@ struct AppConfigTests {
         let timing = try #require(properties["shortcutTiming"] as? [String: Any])
         let timingProperties = try #require(timing["properties"] as? [String: Any])
         let defaults = try #require(timing["default"] as? [String: Int])
-        for (key, baseline) in [("searchOpenMs", 150), ("selectAllMs", 50), ("resultsMs", 500)] {
+        for (key, maximum) in [("searchOpenMs", 150), ("selectAllMs", 50), ("resultsMs", 500)] {
             let field = try #require(timingProperties[key] as? [String: Any])
             #expect(field["type"] as? String == "integer")
             #expect(field["minimum"] as? Int == 0)
-            #expect(field["maximum"] as? Int == baseline)
-            #expect(field["default"] as? Int == baseline)
-            #expect(defaults[key] == baseline)
+            #expect(field["maximum"] as? Int == maximum)
+            #expect(field["default"] as? Int == 0)
+            #expect(defaults[key] == 0)
         }
+        let timingVersion = try #require(properties["shortcutTimingVersion"] as? [String: Any])
+        #expect(timingVersion["type"] as? String == "integer")
+        #expect(timingVersion["const"] as? Int == AppConfig.currentShortcutTimingVersion)
+        #expect(timingVersion["default"] as? Int == AppConfig.currentShortcutTimingVersion)
+        #expect(encoded["shortcutTimingVersion"] as? Int == AppConfig.currentShortcutTimingVersion)
     }
 
     private func expectSameFields(schema: [String: Any], value: [String: Any], path: String) throws {

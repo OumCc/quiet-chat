@@ -1,6 +1,7 @@
 // 应用配置模型与读写。
 // 字段与 shared/config.schema.json 一一对应，macOS 与 Windows 读写同一格式（测试会校验两者一致）。
 // 兼容规则：缺失字段取默认值、未知字段忽略，因此新旧版本可以读取彼此写出的配置。
+// 没有当前速度版本标记的旧时序归零；加载不写文件，正常保存后保留后续选择。
 
 import Foundation
 
@@ -38,6 +39,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// 当前配置格式版本；只有不兼容的格式变化才递增。
     public static let currentSchemaVersion = 1
 
+    /** 常规速度配置的当前版本；旧配置没有此标记时将三段等待统一归零。 */
+    public static let currentShortcutTimingVersion = 1
+
     public var schemaVersion: Int
     /// 整块遮挡下聊天列表栏的位置（校准结果）。
     public var listColumn: ListColumnLayout
@@ -45,8 +49,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var maskMode: MaskMode
     /** 快捷入口的完整搜索名称，保存前由 `ChatWhitelist.normalized` 整理。 */
     public var whitelist: [String]
-    /** 快捷入口的分阶段试验时序；默认基准，重启沿用最后成功保存的选择。 */
+    /** 快捷入口的分阶段时序；默认全零，重启沿用最后成功保存的选择。 */
     public var shortcutTiming: ShortcutTiming
+    /** 编码时写入当前速度版本；用于区分升级前的试验值与后续用户选择。 */
+    public let shortcutTimingVersion: Int
     /** 快捷入口方式的独立校准；保留历史键名，nil 时由整块遮挡布局推导。 */
     public var preciseListColumn: ListColumnLayout?
     /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
@@ -56,7 +62,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /** 整个应用的外观偏好；默认跟随系统，重启后沿用最后保存的选择。 */
     public var appearanceMode: AppearanceMode
 
-    /** 创建持久化配置；省略快捷时序时沿用 150／50／500 毫秒基准。 */
+    /** 创建持久化配置；省略快捷时序时使用全零基准，并携带当前速度版本。 */
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
         maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
@@ -68,6 +74,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.maskMode = maskMode
         self.whitelist = whitelist
         self.shortcutTiming = shortcutTiming
+        self.shortcutTimingVersion = Self.currentShortcutTimingVersion
         self.preciseListColumn = preciseListColumn
         self.password = password
         self.hidePasswordInput = hidePasswordInput
@@ -76,14 +83,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static let `default` = AppConfig()
 
-    /** 读取兼容配置；时序对象无效时只回退时序，不丢弃密码、名单或其他有效字段。 */
+    /** 读取兼容配置；旧速度整组归零，当前速度独立校验，不丢弃其他有效字段或改写文件。 */
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         listColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .listColumn) ?? .default
         maskMode = try container.decodeIfPresent(MaskMode.self, forKey: .maskMode) ?? .full
         whitelist = try container.decodeIfPresent([String].self, forKey: .whitelist) ?? []
-        shortcutTiming = (try? container.decode(ShortcutTiming.self, forKey: .shortcutTiming)) ?? .baseline
+        shortcutTimingVersion = Self.currentShortcutTimingVersion
+        let savedTimingVersion = try? container.decode(Int.self, forKey: .shortcutTimingVersion)
+        shortcutTiming = savedTimingVersion == Self.currentShortcutTimingVersion
+            ? (try? container.decode(ShortcutTiming.self, forKey: .shortcutTiming)) ?? .baseline
+            : .baseline
         preciseListColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .preciseListColumn)
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
