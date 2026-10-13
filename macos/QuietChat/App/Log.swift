@@ -13,4 +13,5 @@ enum Log {
     static let tracking = Logger(subsystem: subsystem, category: "tracking")
     static let mask = Logger(subsystem: subsystem, category: "mask")
     static let shortcuts = Logger(subsystem: subsystem, category: "shortcuts")
+    static let updates = Logger(subsystem: subsystem, category: "updates")
 }

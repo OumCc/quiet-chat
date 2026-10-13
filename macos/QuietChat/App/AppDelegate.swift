@@ -4,6 +4,7 @@
 // 快捷入口由用户点击发起一次键盘搜索；显示刷新不发按键，模式和目标失效时取消。
 // 分阶段响应速度随配置保存；变更先取消旧操作，点击时传入不可变快照。
 // 外观由应用统一设置，窗口和控件继承；切换时保留输入与校准草稿。
+// 更新检查须先取得同意；升级后按实际权限显示一次重新授权引导。
 
 import AppKit
 import QuietChatCore
@@ -15,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var config = AppConfig.default
     private var lockState = LockState()
     private let permission = AccessibilityPermission()
+    private let updatePreferences = UpdatePreferences()
+    private var updates: AppUpdateController?
     private let maskController = MaskController()
     private let shortcuts = WeChatShortcutController()
     private var lastMainWindowID: CGWindowID?
@@ -43,16 +46,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         maskController.onPasswordVisibilityChange = { [weak self] hidden in self?.saveHidePasswordInput(hidden) }
         statusMenu = StatusMenuController(delegate: self)
 
+        let updates = AppUpdateController(preferences: updatePreferences)
+        updates.onChange = { [weak self] in self?.statusMenu?.updateIcon() }
+        updates.onUserInteraction = { [weak self] in self?.prepareToOpenStatusMenu() }
+        updates.onRelaunch = { [weak self] in self?.shortcuts.cancel() }
+        self.updates = updates
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
+        let needsUpgradeReminder = UpdatePreferences.needsPermissionReminder(
+            buildChanged: updatePreferences.recordLaunch(buildVersion: build),
+            hasAccessibility: permission.isGranted,
+            needsKeyboardAccess: config.maskMode == .shortcuts, canPostEvents: permission.canPostEvents)
+
         if permission.isGranted {
             startTracking()
         } else {
             Log.app.notice("辅助功能未授权，等待用户授权")
-            permission.request()
+            if !needsUpgradeReminder { permission.request() }
             permission.waitForGrant { [weak self] in
                 Log.app.notice("辅助功能已授权")
                 self?.startTracking()
             }
         }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if needsUpgradeReminder { self.showUpgradePermissionReminder() }
+            self.updates?.start()
+        }
+    }
+
+    private func showUpgradePermissionReminder() {
+        let alert = NSAlert()
+        alert.messageText = "升级后需要重新授权"
+        alert.informativeText = "QuietChat 使用临时签名，升级后系统可能不再认可旧的辅助功能授权。请在“隐私与安全性 → 辅助功能”用“−”移除旧的 QuietChat，再用“+”添加当前应用并开启权限。快捷入口也需要键盘合成访问。你的密码、白名单和校准设置仍然保留。"
+        alert.addButton(withTitle: "打开辅助功能设置")
+        alert.addButton(withTitle: "稍后")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { requestAccessibilityPermission() }
     }
 
     /** 退出时使旧操作失效，再释放窗口和刷新监听。 */
@@ -318,6 +347,14 @@ extension AppDelegate: StatusMenuDelegate {
     var shortcutTiming: ShortcutTiming { config.shortcutTiming }
 
     var canEditWhitelist: Bool { config.maskMode == .shortcuts && !lockState.isLocked }
+
+    var canCheckForUpdates: Bool { updates?.canCheckForUpdates ?? false }
+    var automaticallyChecksForUpdates: Bool { updates?.automaticallyChecksForUpdates ?? false }
+    var availableUpdateVersion: String? { updates?.availableUpdateVersion }
+
+    func checkForUpdates() { updates?.checkForUpdates() }
+    func toggleAutomaticUpdateChecks() { updates?.toggleAutomaticChecks() }
+    func openUpdateDownloads() { updates?.openDownloads() }
 
     /// 以系统登录项为准，不写入配置：用户也可能在「系统设置 → 通用 → 登录项」里直接增删，
     /// 菜单每次打开都重新读取，两边不会不一致。系统默认没有登记，即默认关闭。

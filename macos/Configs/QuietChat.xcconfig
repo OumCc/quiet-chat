@@ -12,4 +12,10 @@ DEVELOPMENT_TEAM =
 
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 
+INFOPLIST_FILE = Configs/QuietChat-Info.plist
+CODE_SIGN_ENTITLEMENTS = Configs/QuietChat.entitlements
+// 空变量避免 xcconfig 把 URL 中的双斜线当作注释；测试构建可覆盖更新源和公钥。
+SPARKLE_FEED_URL = https:/$()/github.com/OumCc/quiet-chat/releases/latest/download/appcast.xml
+SPARKLE_PUBLIC_ED_KEY = P4MIh0y6O5GAEBr2wlyI/il8zIcdPecaxi0bcNJINys=
+
 #include? "Local.xcconfig"

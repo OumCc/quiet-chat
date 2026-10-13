@@ -1,4 +1,4 @@
-// 菜单栏图标与菜单：显示锁定状态和应用版本，提供授权入口、立即锁定、修改密码、恢复默认密码、校准、遮挡方式、白名单、分阶段速度、外观、开机自启动和退出。
+// 菜单栏图标与菜单：显示锁定状态、版本与更新提醒，提供更新、授权、密码、校准、遮挡方式、白名单、速度、外观、登录项和退出。
 // 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
 // 恢复默认密码、切换遮挡方式、外观和开机自启动不受锁定限制。
 
@@ -20,6 +20,18 @@ protocol StatusMenuDelegate: AnyObject {
     var shortcutTiming: ShortcutTiming { get }
     /** 快捷入口方式且已解锁时才能编辑白名单。 */
     var canEditWhitelist: Bool { get }
+    /** 下载忙碌时禁用检查；已有提醒可通过检查动作唤回标准窗口。 */
+    var canCheckForUpdates: Bool { get }
+    /** Sparkle 保存的检查选择；与是否允许后台安装无关。 */
+    var automaticallyChecksForUpdates: Bool { get }
+    /** 尚未得到用户关注的后台更新，用于图标标记和菜单标题。 */
+    var availableUpdateVersion: String? { get }
+    /** 用户主动检查或关注已有更新，安装仍由标准窗口征求确认。 */
+    func checkForUpdates()
+    /** 切换并持久化自动检查选择，不触发静默安装。 */
+    func toggleAutomaticUpdateChecks()
+    /** 手动下载安装包入口，用于系统或网络阻止自动更新时。 */
+    func openUpdateDownloads()
     /** 菜单接管输入时停止未完成搜索，不改变锁定状态或方式。 */
     func prepareToOpenStatusMenu()
     func requestAccessibilityPermission()
@@ -99,13 +111,27 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         updateIcon()
     }
 
-    /// 锁定状态变化后更新图标；菜单内容在每次打开时重建，无需主动刷新。
+    /** 同步锁定图标与更新圆点；菜单内容在每次打开时重建。 */
     func updateIcon() {
         let locked = delegate?.isLocked ?? true
-        let image = NSImage(named: locked ? "MenuBarLocked" : "MenuBarUnlocked")
+        let base = NSImage(named: locked ? "MenuBarLocked" : "MenuBarUnlocked")
+        let version = delegate?.availableUpdateVersion
+        let image: NSImage?
+        if let base, version != nil {
+            image = NSImage(size: base.size, flipped: false) { rect in
+                base.draw(in: rect.insetBy(dx: 1, dy: 1))
+                NSColor.black.setFill()
+                NSBezierPath(ovalIn: NSRect(x: rect.maxX - 4, y: rect.maxY - 4, width: 4, height: 4)).fill()
+                return true
+            }
+        } else {
+            image = base?.copy() as? NSImage
+        }
         image?.isTemplate = true
-        image?.accessibilityDescription = locked ? "QuietChat 已锁定" : "QuietChat 已解锁"
+        let status = locked ? "QuietChat 已锁定" : "QuietChat 已解锁"
+        image?.accessibilityDescription = version.map { "\(status)，新版本 \($0) 可用" } ?? status
         statusItem.button?.image = image
+        statusItem.button?.toolTip = image?.accessibilityDescription
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -169,6 +195,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
         menu.addItem(makeDisabledItem("当前版本：\(version)"))
+        let updateTitle = delegate.availableUpdateVersion.map { "安装更新 v\($0)…" } ?? "检查更新…"
+        let check = makeItem(updateTitle, #selector(checkForUpdates))
+        check.isEnabled = delegate.canCheckForUpdates
+        menu.addItem(check)
+        let automaticChecks = makeItem("自动检查更新", #selector(toggleAutomaticUpdateChecks))
+        automaticChecks.state = delegate.automaticallyChecksForUpdates ? .on : .off
+        menu.addItem(automaticChecks)
+        menu.addItem(makeItem("下载安装包…", #selector(openUpdateDownloads)))
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 QuietChat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
@@ -273,4 +308,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func resetPassword() { delegate?.resetPassword() }
     @objc private func beginCalibration() { delegate?.beginCalibration() }
     @objc private func toggleLaunchAtLogin() { delegate?.toggleLaunchAtLogin() }
+    @objc private func checkForUpdates() { delegate?.checkForUpdates() }
+    @objc private func toggleAutomaticUpdateChecks() { delegate?.toggleAutomaticUpdateChecks() }
+    @objc private func openUpdateDownloads() { delegate?.openUpdateDownloads() }
 }

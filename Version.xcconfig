@@ -1,2 +1,2 @@
 // macOS 应用版本的统一来源；升级时修改此值，发布 tag 必须为 v<版本号>。
-MARKETING_VERSION = 0.1.0
+MARKETING_VERSION = 1.1.0
