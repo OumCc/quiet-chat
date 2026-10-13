@@ -1,6 +1,6 @@
 # 构建 macOS 安装包：推送 v* tag 时构建通用二进制（arm64 + x86_64），打成 DMG 并发布到 GitHub Release；
 # 手动触发时只构建，DMG 作为 workflow artifact 下载。
-# 使用临时签名（ad-hoc），不需要任何 Secrets；用户首次打开需在「隐私与安全性」里放行，见 README。
+# 应用使用临时签名；更新归档和清单使用 SPARKLE_ED25519_PRIVATE_KEY 签名。
 name: Release macOS
 
 on:
@@ -10,6 +10,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -21,13 +25,31 @@ jobs:
       - name: 确定版本号
         id: version
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          VERSION="$(sed -n 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*//p' Version.xcconfig)"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Version.xcconfig 未设置 MARKETING_VERSION"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::发布 tag $GITHUB_REF_NAME 与 Version.xcconfig 中的版本 $VERSION 不一致"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::更新源仅接受稳定版本 x.y.z"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           xcodebuild -version
+
+      - name: 检查发布密钥
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo "::error::缺少 SPARKLE_ED25519_PRIVATE_KEY，禁止发布未签名更新"
+            exit 1
+          fi
 
       - name: 单元测试
         run: swift test --package-path macos/QuietChatCore
@@ -36,31 +58,52 @@ jobs:
         # generic 目标下 Release 默认同时编译 arm64 和 x86_64；
         # 显式指定临时签名，避免依赖 Local.xcconfig
         run: |
+          xcodebuild -resolvePackageDependencies \
+            -project macos/QuietChat.xcodeproj -scheme QuietChat -derivedDataPath build \
+            -onlyUsePackageVersionsFromResolvedFile
           xcodebuild \
             -project macos/QuietChat.xcodeproj \
             -scheme QuietChat \
             -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath build \
+            -disableAutomaticPackageResolution \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM= \
-            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             build
           APP=build/Build/Products/Release/QuietChat.app
+          # Xcode 对 ad-hoc 默认关闭 runtime，打包前显式保留运行时和所需 entitlement。
+          codesign --force --sign - --options runtime \
+            --entitlements macos/Configs/QuietChat.entitlements "$APP"
           lipo -archs "$APP/Contents/MacOS/QuietChat"
-          codesign --verify --strict --verbose=2 "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: 打包 DMG
         run: |
-          DMG="QuietChat-${{ steps.version.outputs.version }}.dmg"
-          mkdir dmg
-          cp -R build/Build/Products/Release/QuietChat.app dmg/
+          mkdir -p release dmg
+          DMG="release/QuietChat-${{ steps.version.outputs.version }}.dmg"
+          ditto build/Build/Products/Release/QuietChat.app dmg/QuietChat.app
           ln -s /Applications dmg/Applications
           hdiutil create -volname "QuietChat" -srcfolder dmg -format UDZO -ov "$DMG"
           shasum -a 256 "$DMG" | tee "$DMG.sha256"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: 生成版本说明与签名更新清单
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          NOTES="release/QuietChat-${{ steps.version.outputs.version }}.md"
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" --jq .body > "$NOTES"
+          cp "$NOTES" "$RUNNER_TEMP/quiet-chat-release-notes.md"
+          bash tools/release/prepare-update.sh \
+            build/Build/Products/Release/QuietChat.app release \
+            build/SourcePackages/artifacts/sparkle/Sparkle/bin \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -68,6 +111,8 @@ jobs:
           path: |
             ${{ env.DMG }}
             ${{ env.DMG }}.sha256
+            release/appcast.xml
+            release/QuietChat-${{ steps.version.outputs.version }}.md
 
       - name: 发布 Release
         if: github.ref_type == 'tag'
@@ -75,5 +120,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" \
+            release/appcast.xml "release/QuietChat-${{ steps.version.outputs.version }}.md" \
+            --draft --verify-tag \
             --title "QuietChat $GITHUB_REF_NAME" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/quiet-chat-release-notes.md"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

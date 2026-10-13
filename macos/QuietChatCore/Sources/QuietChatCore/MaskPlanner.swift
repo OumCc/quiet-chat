@@ -1,6 +1,5 @@
 // 遮罩决策：根据主窗口快照和列表栏布局，决定遮罩显示在哪里、要不要收起。
-// 原则是"宁可多遮，不漏出"：只有明确压在微信之上的其他窗口，以及精准遮挡下识别为白名单的行，才会在遮罩上开洞。
-// 显示规则对应 docs/architecture.md「显示规则」一节，白名单行的开洞见「精准遮挡」。
+// 只为明确压在微信之上的窗口开洞；名单不参与几何计算，原聊天列表始终不透明。
 
 import CoreGraphics
 
@@ -8,7 +7,7 @@ import CoreGraphics
 public struct MaskPlan: Equatable, Sendable {
     /// 遮罩覆盖的区域，即列表栏矩形。
     public var maskRect: CGRect
-    /// 遮罩上不绘制的区域：其他窗口压在微信之上的部分，以及露出的白名单行，已裁剪到 `maskRect` 内。
+    /** 上层窗口与遮罩相交的区域，已裁剪到 maskRect 内。 */
     public var holes: [CGRect]
 
     public init(maskRect: CGRect, holes: [CGRect]) {
@@ -32,38 +31,20 @@ public enum MaskDecision: Equatable, Sendable {
     case keep
 }
 
-/// 遮罩的几何计算与显示规则。
+/** 根据窗口快照和校准计算不透明遮罩，只为上层窗口让出区域。 */
 public enum MaskPlanner {
-    /// 精准遮挡时遮罩底部始终遮住的高度：密码框放在这一条里，露出的白名单行不会伸进来。
-    public static let preciseReservedBottomHeight: CGFloat = 56
-
-    /// 计算遮罩的位置和洞；列表栏与窗口没有交集时返回 nil。遮罩和洞都落在整点上。
-    /// - Parameters:
-    ///   - revealed: 要露出的带区（Quartz 全局坐标），精准遮挡下为识别出的白名单行；整块遮挡时为空。
-    ///   - reservedBottomHeight: 遮罩底部始终遮住的高度：露出的带区不会伸进这一条，密码框放在这里。
-    ///     只限制 `revealed`，压在微信之上的窗口照常开洞。
+    /** 计算遮罩和上层窗口洞，均取整点；列表栏与主窗口无交集时返回 nil。 */
     public static func plan(
-        windowFrame: CGRect, layout: ListColumnLayout, occluders: [CGRect],
-        revealed: [CGRect] = [], reservedBottomHeight: CGFloat = 0
+        windowFrame: CGRect, layout: ListColumnLayout, occluders: [CGRect]
     ) -> MaskPlan? {
         guard let maskRect = layout.rect(in: windowFrame) else { return nil }
-        let revealable = CGRect(
-            x: maskRect.minX, y: maskRect.minY,
-            width: maskRect.width, height: max(0, maskRect.height - reservedBottomHeight))
         let holes = occluders.compactMap { hole(for: $0, in: maskRect) }
-            + revealed.compactMap { hole(for: $0, in: revealable) }
         return MaskPlan(maskRect: maskRect, holes: holes)
     }
 
-    /// 决定遮罩下一步的状态。
-    /// - Parameters:
-    ///   - snapshot: 主窗口快照；nil 表示没有可跟踪的主窗口，或遮罩当前不应生效。
-    ///   - maskIsOnActiveSpace: 遮罩窗口此刻是否位于当前桌面。
-    ///   - revealed: 见 `plan`。
-    ///   - reservedBottomHeight: 见 `plan`。
+    /** 按可见性决定显示、收起或随其他桌面保持；snapshot 为 nil 时收起遮罩。 */
     public static func decide(
-        snapshot: WindowSnapshot?, layout: ListColumnLayout, maskIsOnActiveSpace: Bool,
-        revealed: [CGRect] = [], reservedBottomHeight: CGFloat = 0
+        snapshot: WindowSnapshot?, layout: ListColumnLayout, maskIsOnActiveSpace: Bool
     ) -> MaskDecision {
         guard let snapshot else { return .hide }
         switch snapshot.presence {
@@ -74,8 +55,7 @@ public enum MaskPlanner {
             return maskIsOnActiveSpace ? .hide : .keep
         case .visible:
             guard let plan = plan(
-                windowFrame: snapshot.frame, layout: layout, occluders: snapshot.occluders,
-                revealed: revealed, reservedBottomHeight: reservedBottomHeight)
+                windowFrame: snapshot.frame, layout: layout, occluders: snapshot.occluders)
             else {
                 return .hide
             }

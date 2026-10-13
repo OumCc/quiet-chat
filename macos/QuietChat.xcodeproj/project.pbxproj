@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000014 /* QuietChatCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000013 /* QuietChatCore */; };
-		A10000000000000000000017 /* QuietChatDetection in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000016 /* QuietChatDetection */; };
+		A10000000000000000000016 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000017 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,7 +31,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000014 /* QuietChatCore in Frameworks */,
-				A10000000000000000000017 /* QuietChatDetection in Frameworks */,
+				A10000000000000000000016 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -85,7 +85,7 @@
 			name = QuietChat;
 			packageProductDependencies = (
 				A10000000000000000000013 /* QuietChatCore */,
-				A10000000000000000000016 /* QuietChatDetection */,
+				A10000000000000000000017 /* Sparkle */,
 			);
 			productName = QuietChat;
 			productReference = A10000000000000000000004 /* QuietChat.app */;
@@ -117,6 +117,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A10000000000000000000012 /* XCLocalSwiftPackageReference "QuietChatCore" */,
+				A1000000000000000000001A /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000003 /* Products */;
@@ -215,7 +216,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -238,7 +238,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
@@ -273,17 +272,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A1000000000000000000001A /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {kind = exactVersion; version = 2.10.0; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000017 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1000000000000000000001A /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		A10000000000000000000013 /* QuietChatCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000012 /* XCLocalSwiftPackageReference "QuietChatCore" */;
 			productName = QuietChatCore;
 		};
-		A10000000000000000000016 /* QuietChatDetection */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A10000000000000000000012 /* XCLocalSwiftPackageReference "QuietChatCore" */;
-			productName = QuietChatDetection;
-		};
+
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A10000000000000000000001 /* Project object */;

@@ -1,19 +1,21 @@
 // 应用配置模型与读写。
 // 字段与 shared/config.schema.json 一一对应，macOS 与 Windows 读写同一格式（测试会校验两者一致）。
 // 兼容规则：缺失字段取默认值、未知字段忽略，因此新旧版本可以读取彼此写出的配置。
+// 没有当前速度版本标记的旧时序归零；加载不写文件，正常保存后保留后续选择。
 
 import Foundation
 
-/// 锁定时的遮挡方式。只决定遮住哪里，解锁、自动锁定等规则在两种方式下相同。
+/** 锁定时的遮挡方式；两种方式共用解锁和自动锁定规则。 */
 public enum MaskMode: String, Codable, Sendable {
     /// 整块遮住聊天列表栏。
     case full
-    /// 只露出白名单聊天所在的行，其余照旧遮住。
-    case precise
+    /** 不透明遮罩上的静态白名单快捷入口。 */
+    case shortcuts
 
-    // 未知取值（例如更新的版本写出的新方式）按整块遮挡处理：宁可多遮
+    /** 旧 precise 映射到快捷入口；未知字符串回退整块遮挡，编码只输出当前方式。 */
     public init(from decoder: any Decoder) throws {
-        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .full
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = value == "precise" ? .shortcuts : Self(rawValue: value) ?? .full
     }
 }
 
@@ -37,14 +39,21 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// 当前配置格式版本；只有不兼容的格式变化才递增。
     public static let currentSchemaVersion = 1
 
+    /** 常规速度配置的当前版本；旧配置没有此标记时将三段等待统一归零。 */
+    public static let currentShortcutTimingVersion = 1
+
     public var schemaVersion: Int
     /// 整块遮挡下聊天列表栏的位置（校准结果）。
     public var listColumn: ListColumnLayout
     /// 遮挡方式；默认整块遮挡。
     public var maskMode: MaskMode
-    /// 精准遮挡要露出的聊天名称，保存前由 `ChatWhitelist.normalized` 整理；只在精准遮挡下起作用。
+    /** 快捷入口的完整搜索名称，保存前由 `ChatWhitelist.normalized` 整理。 */
     public var whitelist: [String]
-    /// 精准遮挡下聊天列表栏的位置（校准结果）；nil 表示还没有在精准遮挡下校准过，见 `listColumnLayout(for:)`。
+    /** 快捷入口的分阶段时序；默认全零，重启沿用最后成功保存的选择。 */
+    public var shortcutTiming: ShortcutTiming
+    /** 编码时写入当前速度版本；用于区分升级前的试验值与后续用户选择。 */
+    public let shortcutTimingVersion: Int
+    /** 快捷入口方式的独立校准；保留历史键名，nil 时由整块遮挡布局推导。 */
     public var preciseListColumn: ListColumnLayout?
     /// 用户设置的解锁密码；nil 表示从未修改或已恢复默认，使用默认密码。
     public var password: PasswordRecord?
@@ -53,15 +62,19 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /** 整个应用的外观偏好；默认跟随系统，重启后沿用最后保存的选择。 */
     public var appearanceMode: AppearanceMode
 
+    /** 创建持久化配置；省略快捷时序时使用全零基准，并携带当前速度版本。 */
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
         maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
-        password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system
+        password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system,
+        shortcutTiming: ShortcutTiming = .baseline
     ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
         self.maskMode = maskMode
         self.whitelist = whitelist
+        self.shortcutTiming = shortcutTiming
+        self.shortcutTimingVersion = Self.currentShortcutTimingVersion
         self.preciseListColumn = preciseListColumn
         self.password = password
         self.hidePasswordInput = hidePasswordInput
@@ -70,27 +83,30 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public static let `default` = AppConfig()
 
+    /** 读取兼容配置；旧速度整组归零，当前速度独立校验，不丢弃其他有效字段或改写文件。 */
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
         listColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .listColumn) ?? .default
         maskMode = try container.decodeIfPresent(MaskMode.self, forKey: .maskMode) ?? .full
         whitelist = try container.decodeIfPresent([String].self, forKey: .whitelist) ?? []
+        shortcutTimingVersion = Self.currentShortcutTimingVersion
+        let savedTimingVersion = try? container.decode(Int.self, forKey: .shortcutTimingVersion)
+        shortcutTiming = savedTimingVersion == Self.currentShortcutTimingVersion
+            ? (try? container.decode(ShortcutTiming.self, forKey: .shortcutTiming)) ?? .baseline
+            : .baseline
         preciseListColumn = try container.decodeIfPresent(ListColumnLayout.self, forKey: .preciseListColumn)
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
         appearanceMode = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode) ?? .system
     }
 
-    /// 指定遮挡方式使用的列表栏布局。
-    ///
-    /// 精准遮挡还没有校准过时，沿用整块遮挡的左边距和宽度，上边距取 0：
-    /// 整块遮挡的上边距可能被用来露出顶部的聊天，精准遮挡照搬的话会露出没有识别过的行。
+    /** 指定方式的布局；快捷入口未校准时沿用整块遮挡左右边界，上边距取 0 以遮住整个列表。 */
     public func listColumnLayout(for mode: MaskMode) -> ListColumnLayout {
         switch mode {
         case .full:
             listColumn
-        case .precise:
+        case .shortcuts:
             preciseListColumn ?? ListColumnLayout(leftInset: listColumn.leftInset, topInset: 0, width: listColumn.width)
         }
     }

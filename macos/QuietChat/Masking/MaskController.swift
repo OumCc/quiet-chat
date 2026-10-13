@@ -13,19 +13,7 @@ final class MaskController {
 
     /// 列表栏布局（当前遮挡方式的校准结果）。
     var layout: ListColumnLayout = .default
-    /// 精准遮挡要露出的带区（微信主窗口坐标：原点在窗口外框左上角、y 向下）；整块遮挡时为空。
-    var revealedBands: [CGRect] = [] {
-        didSet {
-            if revealedBands != oldValue { render() }
-        }
-    }
-    /// 遮罩底部始终遮住的高度，露出的带区不会伸进来；精准遮挡时密码框放在这一条里，整块遮挡时为 0。
-    var reservedBottomHeight: CGFloat = 0 {
-        didSet {
-            if reservedBottomHeight != oldValue { render() }
-        }
-    }
-    /// 密码框的位置：整块遮挡时居中，精准遮挡时在底部条里。
+    /// 密码框的位置：整块遮挡时居中，快捷入口时在底部 56 pt 区域。
     var lockControlsPlacement: MaskView.LockControlsPlacement {
         get { view.lockControlsPlacement }
         set { view.lockControlsPlacement = newValue }
@@ -42,6 +30,8 @@ final class MaskController {
     }
     /// 用户在遮罩上提交了密码；返回密码是否正确。正确时由调用方把 isLocked 置为 false。
     var onUnlockAttempt: ((String) -> Bool)?
+    /** 用户点击密码框时转交取消通知，不读取或修改密码草稿。 */
+    var onPasswordFocus: (() -> Void)?
     /// 密码框是否隐藏输入内容（用户上次的选择）。
     var hidesPasswordInput: Bool {
         get { view.hidesPasswordInput }
@@ -49,6 +39,20 @@ final class MaskController {
     }
     /// 用户切换了密码框的显示方式，需要记住；参数为是否隐藏输入。
     var onPasswordVisibilityChange: ((Bool) -> Void)?
+    /** 是否采用快捷入口布局；按钮只在锁定且不校准时出现。 */
+    var usesShortcuts = false { didSet { if usesShortcuts != oldValue { render() } } }
+    /** 按配置顺序传给视图的完整搜索名称。 */
+    var shortcutNames: [String] {
+        get { view.shortcutNames }
+        set { view.shortcutNames = newValue }
+    }
+    /** 静态入口点击，模式与名单核对由装配层负责。 */
+    var onShortcut: ((String) -> Void)?
+    /** 仅刷新快捷操作反馈，密码解锁不随忙碌状态禁用。 */
+    func updateShortcutFeedback(isBusy: Bool, message: String?) {
+        view.shortcutBusy = isBusy
+        view.shortcutMessage = message
+    }
     /// 校准完成、需要保存布局时回调。
     var onCalibrationFinished: ((ListColumnLayout) -> Void)?
 
@@ -68,6 +72,7 @@ final class MaskController {
 
     init() {
         panel.contentView = view
+        view.onPasswordFocus = { [weak self] in self?.onPasswordFocus?() }
         view.onPasswordSubmit = { [weak self] password in
             guard let self else { return }
             if self.onUnlockAttempt?(password) != true {
@@ -75,6 +80,7 @@ final class MaskController {
             }
         }
         view.onPasswordVisibilityChange = { [weak self] hidden in self?.onPasswordVisibilityChange?(hidden) }
+        view.onShortcut = { [weak self] name in self?.onShortcut?(name) }
         view.onEdgeDrag = { [weak self] frame in self?.dragCalibration(to: frame) }
         view.onFinishCalibration = { [weak self] in self?.endCalibration(save: true) }
         view.onCancelCalibration = { [weak self] in self?.endCalibration(save: false) }
@@ -92,6 +98,9 @@ final class MaskController {
         }
         render()
     }
+
+    /** 向微信交接焦点，保留密码框草稿和面板显示状态。 */
+    func releaseInputFocus() { view.releaseInputFocus() }
 
     // MARK: - 校准
 
@@ -132,15 +141,11 @@ final class MaskController {
 
     private func render() {
         let calibrating = mode == .calibrating
-        // 带区按窗口坐标保存，这里加上窗口原点：窗口移动时露出的行直接跟着走，不用重新识别。
-        // 校准时遮罩是一整块半透明的框，不露出任何行
-        let origin = snapshot?.frame.origin ?? .zero
+        view.showsShortcuts = usesShortcuts && isLocked && !calibrating
         let decision = MaskPlanner.decide(
             snapshot: isLocked || calibrating ? snapshot : nil,
             layout: calibrating ? calibrationDraft ?? layout : layout,
-            maskIsOnActiveSpace: panel.isOnActiveSpace,
-            revealed: calibrating ? [] : revealedBands.map { $0.offsetBy(dx: origin.x, dy: origin.y) },
-            reservedBottomHeight: calibrating ? 0 : reservedBottomHeight)
+            maskIsOnActiveSpace: panel.isOnActiveSpace)
         switch decision {
         case .show(let plan):
             show(plan, onAllSpaces: snapshot?.isOnAllSpaces == true)

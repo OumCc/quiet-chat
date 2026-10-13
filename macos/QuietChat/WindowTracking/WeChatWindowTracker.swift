@@ -12,8 +12,20 @@ enum WeChat {
     static let bundleIdentifier = "com.tencent.xinWeChat"
 }
 
+/** 跟踪并聚焦唯一主窗口；窗口级身份核对不确认搜索控件或聊天内容。 */
 @MainActor
 final class WeChatWindowTracker {
+    /** 操作开始时捕获的进程与主窗口身份。 */
+    struct ShortcutTarget: Equatable, Sendable {
+        let pid: pid_t
+        let windowID: CGWindowID
+    }
+
+    /** 可检测的窗口身份失败，不包含窗口标题或聊天名称。 */
+    enum FocusError: String, Error {
+        case targetUnavailable, foregroundChanged, focusedWindowChanged, focusUnconfirmed
+    }
+
     let pid: pid_t
     /// 主窗口可能发生变化时回调（移动、缩放、显示状态变化等）。
     var onChange: (() -> Void)?
@@ -25,7 +37,7 @@ final class WeChatWindowTracker {
     private var observer: AXObserver?
     private var applicationNotificationsRegistered = false
     private var mainWindow: AXUIElement?
-    /// 主窗口在窗口服务器里的编号；还没有识别到主窗口时为 nil。精准遮挡读取画面时用它找到窗口。
+    /** 已识别主窗口的编号；快捷操作捕获此身份，变化后旧操作失效。 */
     private(set) var mainWindowID: CGWindowID?
     private var lastResolveAttempt = Date.distantPast
     private var lastPresence: WindowPresence?
@@ -63,6 +75,55 @@ final class WeChatWindowTracker {
         observer = nil
         mainWindow = nil
         mainWindowID = nil
+    }
+
+    /** 捕获可见主窗口；不重新选择独立窗口，也不改变焦点。 */
+    func shortcutTarget() -> ShortcutTarget? {
+        guard let id = mainWindowID else { return nil }
+        let target = ShortcutTarget(pid: pid, windowID: id)
+        return (try? validateTarget(target)) != nil ? target : nil
+    }
+
+    /** 只请求激活和抬起已跟踪主窗口；最多等待 1.5 秒，以真实前台和 AX 窗口身份确认。 */
+    func focusMainWindow(_ target: ShortcutTarget, mayContinue: () -> Bool) async throws {
+        try validateTarget(target)
+        guard mayContinue(), !Task.isCancelled, let mainWindow,
+              let application = NSRunningApplication(processIdentifier: pid) else { throw CancellationError() }
+        application.activate(options: [])
+        AXUIElementSetAttributeValue(mainWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, mainWindow)
+        AXUIElementPerformAction(mainWindow, kAXRaiseAction as CFString)
+        let deadline = ContinuousClock.now + .milliseconds(1500)
+        repeat {
+            guard mayContinue() else { throw CancellationError() }
+            try Task.checkCancellation()
+            try validateTarget(target)
+            if (try? validateShortcutFocus(target)) != nil { return }
+            try await Task.sleep(for: .milliseconds(50))
+        } while ContinuousClock.now < deadline
+        throw FocusError.focusUnconfirmed
+    }
+
+    /** 每组事件和等待期间核对实际前台与主窗口；无法读取聚焦窗口时停止。 */
+    func validateShortcutFocus(_ target: ShortcutTarget) throws {
+        try validateTarget(target)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
+            throw FocusError.foregroundChanged
+        }
+        let focused = appElement.attributeValue(kAXFocusedWindowAttribute)
+        guard focused.error == .success, let value = focused.value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { throw FocusError.focusUnconfirmed }
+        let window = unsafeDowncast(value, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(window, Self.messagingTimeout)
+        guard let focusedID = windowID(of: window) else { throw FocusError.focusUnconfirmed }
+        guard focusedID == target.windowID else { throw FocusError.focusedWindowChanged }
+    }
+
+    private func validateTarget(_ target: ShortcutTarget) throws {
+        guard target.pid == pid, mainWindowID == target.windowID, let mainWindow,
+              let application = NSRunningApplication(processIdentifier: pid), !application.isTerminated,
+              !application.isHidden, mainWindow.bool(kAXMinimizedAttribute) == false,
+              WindowServer.info(of: target.windowID)?.isOnScreen == true else { throw FocusError.targetUnavailable }
     }
 
     /// 读取主窗口当前状态；没有可跟踪的主窗口时返回 nil。
