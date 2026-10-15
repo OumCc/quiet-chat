@@ -13,7 +13,7 @@ final class MaskController {
 
     /// 列表栏布局（当前遮挡方式的校准结果）。
     var layout: ListColumnLayout = .default
-    /// 密码框的位置：整块遮挡时居中，快捷入口时在底部 56 pt 区域。
+    /// 密码框的位置：快捷入口在底部，强控时自动扩大底部空间。
     var lockControlsPlacement: MaskView.LockControlsPlacement {
         get { view.lockControlsPlacement }
         set { view.lockControlsPlacement = newValue }
@@ -28,8 +28,12 @@ final class MaskController {
             render()
         }
     }
-    /// 用户在遮罩上提交了密码；返回密码是否正确。正确时由调用方把 isLocked 置为 false。
-    var onUnlockAttempt: ((String) -> Bool)?
+    /** 提交内容和展示时要求；要求过期时只刷新，不把旧草稿作为新密码验证。 */
+    var onUnlockAttempt: ((String, UnlockRequirement) -> UnlockAttemptResult)?
+    /** 同步强控提示，重复刷新不影响输入草稿。 */
+    func updateTimedControl(requirement: UnlockRequirement, remainingSeconds: Int) {
+        view.updateTimedControl(requirement: requirement, remainingSeconds: remainingSeconds)
+    }
     /** 用户点击密码框时转交取消通知，不读取或修改密码草稿。 */
     var onPasswordFocus: (() -> Void)?
     /// 密码框是否隐藏输入内容（用户上次的选择）。
@@ -73,9 +77,9 @@ final class MaskController {
     init() {
         panel.contentView = view
         view.onPasswordFocus = { [weak self] in self?.onPasswordFocus?() }
-        view.onPasswordSubmit = { [weak self] password in
+        view.onPasswordSubmit = { [weak self] password, requirement in
             guard let self else { return }
-            if self.onUnlockAttempt?(password) != true {
+            if self.onUnlockAttempt?(password, requirement) == .incorrect {
                 self.view.showWrongPassword()
             }
         }

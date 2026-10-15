@@ -282,6 +282,14 @@ struct AppConfigTests {
         #expect(timingVersion["const"] as? Int == AppConfig.currentShortcutTimingVersion)
         #expect(timingVersion["default"] as? Int == AppConfig.currentShortcutTimingVersion)
         #expect(encoded["shortcutTimingVersion"] as? Int == AppConfig.currentShortcutTimingVersion)
+        let timed = try #require(properties["timedControl"] as? [String: Any])
+        let timedProperties = try #require(timed["properties"] as? [String: Any])
+        let enabled = try #require(timedProperties["enabled"] as? [String: Any])
+        let minutes = try #require(timedProperties["durationMinutes"] as? [String: Any])
+        #expect(enabled["default"] as? Bool == TimedControlSettings.default.enabled)
+        #expect(minutes["default"] as? Int == TimedControlSettings.default.durationMinutes)
+        #expect(minutes["minimum"] as? Int == TimedControlSettings.durationRange.lowerBound)
+        #expect(minutes["maximum"] as? Int == TimedControlSettings.durationRange.upperBound)
     }
 
     private func expectSameFields(schema: [String: Any], value: [String: Any], path: String) throws {

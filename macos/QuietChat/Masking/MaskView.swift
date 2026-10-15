@@ -2,11 +2,12 @@
 // 快捷入口按配置顺序固定显示，独立滚动；按钮和反馈区与洞相交时隐藏，不自行发送系统事件。
 // - 遮挡模式：不透明底色、提示文字和密码框；洞（其他窗口压在微信之上的区域）保持全透明，
 //   点击会穿透到下面的窗口。密码框压到洞上时暂时隐藏，免得画到别的窗口上。
-//   密码框由明文框和隐藏输入框叠放实现，右侧按钮切换显示哪一个；整块遮挡时它在中间，快捷入口时在底部 56 pt 密码区域；
+//   普通密码使用明文/隐藏框及显示按钮，强控使用独立手输框；快捷入口底部为提示和输入动态留出空间；
 // - 校准模式：半透明蓝色，可拖动左、右、上三条边；中间的不透明卡片承载提示和完成 / 恢复默认 / 取消按钮。
 // 视图坐标系翻转（原点在左上、y 向下），与 Quartz 方向一致，洞的坐标可以直接使用。
 
 import AppKit
+import QuietChatCore
 
 final class MaskView: NSView {
     enum Style {
@@ -18,7 +19,7 @@ final class MaskView: NSView {
     enum LockControlsPlacement: Equatable {
         /// 整块遮挡：垂直居中，上方有一行提示文字。
         case centered
-        /// 快捷入口：在底部高 `height` 的区域垂直居中，上方放静态按钮及操作反馈。
+        /// 快捷入口：普通密码在指定底部高度内居中，强控按提示高度扩展，上方放入口及反馈。
         case bottomStrip(height: CGFloat)
     }
 
@@ -62,8 +63,29 @@ final class MaskView: NSView {
         }
     }
 
+    /** 当前输入要求；切换时清空旧草稿，强控不改写普通密码的显示偏好。 */
+    var unlockRequirement: UnlockRequirement = .password {
+        didSet {
+            guard unlockRequirement != oldValue else { return }
+            resetPasswordField()
+            let strong = unlockRequirement == .keyboardSequence
+            timedControlStatus.isHidden = !strong
+            sequenceHint.isHidden = !strong
+            applyPasswordVisibility()
+            applyLockControlsPlacement()
+            needsLayout = true
+        }
+    }
+
+    /** 倒计时刷新只更新提示，不触碰草稿或键盘焦点。 */
+    func updateTimedControl(requirement: UnlockRequirement, remainingSeconds: Int) {
+        unlockRequirement = requirement
+        let text = String(format: "定时强控 · 剩余 %02d:%02d", remainingSeconds / 60, remainingSeconds % 60)
+        if timedControlStatus.stringValue != text { timedControlStatus.stringValue = text }
+    }
+
     /// 在密码框里按了回车。
-    var onPasswordSubmit: ((String) -> Void)?
+    var onPasswordSubmit: ((String, UnlockRequirement) -> Void)?
     /** 用户点击密码框时先停止未结束的搜索，再接管键盘；不传递输入内容。 */
     var onPasswordFocus: (() -> Void)?
     /// 用户点了密码框右侧的按钮；参数为切换后的"是否隐藏输入"。
@@ -113,15 +135,19 @@ final class MaskView: NSView {
     private let lockControls = NSStackView()
     private let plainPasswordField = FirstMouseRomanTextField()
     private let securePasswordField = FirstMouseSecureTextField()
+    private let sequenceField = KeyboardSequenceTextField()
+    private let timedControlStatus = NSTextField(wrappingLabelWithString: "")
+    private let sequenceHint = NSTextField(wrappingLabelWithString: UnlockRequirement.keyboardSequenceText)
     private let passwordVisibilityButton = FirstMouseButton()
-    private let passwordError = NSTextField(labelWithString: "密码不对，再试一次")
+    private let passwordError = NSTextField(wrappingLabelWithString: "密码不对，再试一次")
     private let shortcutScroll = NSScrollView()
     private let shortcutDocument = FlippedShortcutDocument()
     private var shortcutButtons: [NSButton] = []
     private let shortcutFeedback = NSTextField(wrappingLabelWithString: "")
-    // 密码框的两种纵向位置，同一时间只启用一个
+    // 普通与强控输入按位置选择纵向约束，同一时间只启用一个。
     private var centeredConstraint: NSLayoutConstraint?
     private var bottomStripConstraint: NSLayoutConstraint?
+    private var strongBottomConstraint: NSLayoutConstraint?
     private let calibrationCard = NSBox()
     private let calibrationControls = NSStackView()
     private var dragEdge: Edge?
@@ -158,6 +184,10 @@ final class MaskView: NSView {
 
     override func layout() {
         super.layout()
+        let textWidth = max(1, bounds.width - 32)
+        for label in [sequenceHint, timedControlStatus, passwordError] where label.preferredMaxLayoutWidth != textWidth {
+            label.preferredMaxLayoutWidth = textWidth
+        }
         layoutShortcutControls()
         updateLockControlsVisibility()
     }
@@ -259,7 +289,9 @@ final class MaskView: NSView {
     /// 密码错误：清空输入并显示提示。
     func showWrongPassword() {
         clearPasswordFields()
+        passwordError.stringValue = unlockRequirement == .keyboardSequence ? "序列不对，请按 Q-M 顺序重输" : "密码不对，再试一次"
         passwordError.isHidden = false
+        needsLayout = true
     }
 
     /// 回到初始状态（锁定或解锁时调用）：清空输入、收起提示、交还键盘焦点。
@@ -313,7 +345,8 @@ final class MaskView: NSView {
 
     private func layoutShortcutControls() {
         let feedbackHeight: CGFloat = shortcutMessage == nil ? 0 : 44
-        let height = max(0, bounds.height - 56 - feedbackHeight - 16)
+        let controlsHeight = bottomControlsHeight
+        let height = max(0, bounds.height - controlsHeight - feedbackHeight - 16)
         shortcutScroll.frame = NSRect(x: 8, y: 8, width: max(0, bounds.width - 16), height: height)
         let width = shortcutScroll.contentSize.width
         shortcutDocument.frame = NSRect(x: 0, y: 0, width: width,
@@ -321,7 +354,7 @@ final class MaskView: NSView {
         for (index, button) in shortcutButtons.enumerated() {
             button.frame = NSRect(x: 0, y: CGFloat(index) * 38, width: width, height: 32)
         }
-        shortcutFeedback.frame = NSRect(x: 8, y: max(8, bounds.height - 56 - feedbackHeight),
+        shortcutFeedback.frame = NSRect(x: 8, y: max(8, bounds.height - controlsHeight - feedbackHeight),
                                         width: max(0, bounds.width - 16), height: feedbackHeight)
         updateShortcutVisibility()
     }
@@ -346,7 +379,14 @@ final class MaskView: NSView {
         onShortcut?(shortcutNames[sender.tag])
     }
 
-    private var passwordFields: [NSTextField] { [plainPasswordField, securePasswordField] }
+    private var passwordFields: [NSTextField] { [plainPasswordField, securePasswordField, sequenceField] }
+
+    private var bottomControlsHeight: CGFloat {
+        let base: CGFloat
+        if case .bottomStrip(let height) = lockControlsPlacement { base = height }
+        else { base = 56 }
+        return unlockRequirement == .keyboardSequence ? max(base, lockControls.frame.height + 16) : base
+    }
 
     private func clearPasswordFields() {
         for field in passwordFields {
@@ -357,8 +397,9 @@ final class MaskView: NSView {
     private func setUpLockControls() {
         plainPasswordField.onFocus = { [weak self] in self?.onPasswordFocus?() }
         securePasswordField.onFocus = { [weak self] in self?.onPasswordFocus?() }
+        sequenceField.onFocus = { [weak self] in self?.onPasswordFocus?() }
         for field in passwordFields {
-            field.placeholderString = "输入密码解锁"
+            if field !== sequenceField { field.placeholderString = "输入密码解锁" }
             field.alignment = .center
             field.target = self
             field.action = #selector(submitPassword(_:))
@@ -374,29 +415,49 @@ final class MaskView: NSView {
         passwordError.textColor = .systemRed
         passwordError.isHidden = true
 
-        // 两个输入框同一时间只显示一个（隐藏的不参与布局），按钮在右侧
-        let fieldRow = NSStackView(views: [plainPasswordField, securePasswordField, passwordVisibilityButton])
+        timedControlStatus.font = .systemFont(ofSize: 11)
+        timedControlStatus.alignment = .center
+        timedControlStatus.textColor = .secondaryLabelColor
+        timedControlStatus.isHidden = true
+        timedControlStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sequenceHint.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        sequenceHint.alignment = .center
+        sequenceHint.lineBreakMode = .byCharWrapping
+        sequenceHint.isHidden = true
+        sequenceHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // 三个输入框同一时间只显示一个；强控框不提供显示切换按钮。
+        let fieldRow = NSStackView(views: [plainPasswordField, securePasswordField, sequenceField, passwordVisibilityButton])
         fieldRow.orientation = .horizontal
         fieldRow.spacing = 4
 
         lockControls.orientation = .vertical
+        lockControls.alignment = .centerX
         lockControls.spacing = 6
+        lockControls.addArrangedSubview(timedControlStatus)
+        lockControls.addArrangedSubview(sequenceHint)
         lockControls.addArrangedSubview(fieldRow)
         lockControls.addArrangedSubview(passwordError)
         lockControls.translatesAutoresizingMaskIntoConstraints = false
         addSubview(lockControls)
 
         // 输入框的宽度约束引用了本视图，两端必须已在同一视图树中，所以放在 addSubview 之后激活
-        var constraints = [lockControls.centerXAnchor.constraint(equalTo: centerXAnchor)]
+        var constraints = [
+            lockControls.centerXAnchor.constraint(equalTo: centerXAnchor),
+            sequenceHint.widthAnchor.constraint(equalTo: widthAnchor, constant: -32),
+            timedControlStatus.widthAnchor.constraint(equalTo: sequenceHint.widthAnchor),
+            passwordError.widthAnchor.constraint(lessThanOrEqualTo: sequenceHint.widthAnchor),
+        ]
         for field in passwordFields {
             // 默认宽 160，遮罩太窄时随之收窄（给右侧按钮留出位置）
-            let preferredWidth = field.widthAnchor.constraint(equalToConstant: 160)
-            preferredWidth.priority = .defaultHigh
+            let preferredWidth = field.widthAnchor.constraint(equalToConstant: field === sequenceField ? 240 : 160)
+            preferredWidth.priority = field === sequenceField ? .defaultLow : .defaultHigh
             constraints += [preferredWidth, field.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -52)]
         }
         NSLayoutConstraint.activate(constraints)
         centeredConstraint = lockControls.topAnchor.constraint(equalTo: centerYAnchor)
         bottomStripConstraint = lockControls.centerYAnchor.constraint(equalTo: bottomAnchor)
+        strongBottomConstraint = lockControls.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         applyLockControlsPlacement()
         applyPasswordVisibility()
     }
@@ -406,18 +467,30 @@ final class MaskView: NSView {
         switch lockControlsPlacement {
         case .centered:
             bottomStripConstraint?.isActive = false
+            strongBottomConstraint?.isActive = false
             centeredConstraint?.isActive = true
         case .bottomStrip(let height):
             centeredConstraint?.isActive = false
-            // 密码框（连同错误提示）的中心落在底部条的中线上
-            bottomStripConstraint?.constant = -height / 2
-            bottomStripConstraint?.isActive = true
+            let strong = unlockRequirement == .keyboardSequence
+            bottomStripConstraint?.isActive = false
+            strongBottomConstraint?.isActive = strong
+            if !strong {
+                bottomStripConstraint?.constant = -height / 2
+                bottomStripConstraint?.isActive = true
+            }
         }
-        needsLayout = true
     }
 
     /// 按 hidesPasswordInput 切换显示哪个输入框；已输入的内容和正在输入的焦点跟着转过去。
     private func applyPasswordVisibility() {
+        let strong = unlockRequirement == .keyboardSequence
+        sequenceField.isHidden = !strong
+        passwordVisibilityButton.isHidden = strong
+        if strong {
+            plainPasswordField.isHidden = true
+            securePasswordField.isHidden = true
+            return
+        }
         let shown: NSTextField = hidesPasswordInput ? securePasswordField : plainPasswordField
         let concealed: NSTextField = hidesPasswordInput ? plainPasswordField : securePasswordField
         let wasEditing = concealed.currentEditor() != nil
@@ -448,7 +521,7 @@ final class MaskView: NSView {
     @objc private func submitPassword(_ sender: NSTextField) {
         let password = sender.stringValue
         guard !password.isEmpty else { return }
-        onPasswordSubmit?(password)
+        onPasswordSubmit?(password, unlockRequirement)
     }
 
     @objc private func togglePasswordVisibility() {

@@ -1,4 +1,4 @@
-// 菜单栏图标与菜单：显示锁定状态、版本与更新提醒，提供更新、授权、密码、校准、遮挡方式、白名单、速度、外观、登录项和退出。
+// 菜单栏图标与菜单：显示锁定状态、版本与更新提醒，提供密码、校准、遮挡方式、白名单、速度、定时强控、外观和登录项。
 // 解锁只能在遮罩上输入密码完成，菜单里没有解锁入口；修改密码、校准和编辑白名单需要先解锁，
 // 恢复默认密码、切换遮挡方式、外观和开机自启动不受锁定限制。
 
@@ -18,6 +18,10 @@ protocol StatusMenuDelegate: AnyObject {
     var appearanceMode: AppearanceMode { get }
     /** 当前快捷入口时序；总和仅表示固定等待，不表示聊天已经打开。 */
     var shortcutTiming: ShortcutTiming { get }
+    /** 持久化的强控开关及时长，与遮挡方式独立。 */
+    var timedControlSettings: TimedControlSettings { get }
+    /** 当前周期剩余秒数；零表示未开启或等待下次原密码成功。 */
+    var timedControlRemainingSeconds: Int { get }
     /** 快捷入口方式且已解锁时才能编辑白名单。 */
     var canEditWhitelist: Bool { get }
     /** 下载忙碌时禁用检查；已有提醒可通过检查动作唤回标准窗口。 */
@@ -40,6 +44,8 @@ protocol StatusMenuDelegate: AnyObject {
     func selectAppearanceMode(_ mode: AppearanceMode)
     /** 修改并保存后续搜索时序；先取消旧操作，不主动发起搜索，锁定时也可调用。 */
     func selectShortcutTiming(_ timing: ShortcutTiming)
+    /** 更改强控偏好；活动周期需要独立手输确认，保存成功后才生效。 */
+    func selectTimedControl(_ settings: TimedControlSettings)
     func editWhitelist()
     func lockNow()
     func changePassword()
@@ -176,6 +182,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(timing)
 
         menu.addItem(.separator())
+        menu.addItem(makeTimedControlItem(delegate.timedControlSettings, remainingSeconds: delegate.timedControlRemainingSeconds))
+
+        menu.addItem(.separator())
         menu.addItem(.sectionHeader(title: "外观"))
         let systemAppearance = makeItem("跟随系统", #selector(selectSystemAppearance))
         systemAppearance.state = delegate.appearanceMode == .system ? .on : .off
@@ -209,6 +218,60 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         delegate?.prepareToOpenStatusMenu()
+    }
+
+    private func makeTimedControlItem(_ settings: TimedControlSettings, remainingSeconds: Int) -> NSMenuItem {
+        let item = NSMenuItem(title: "定时强控", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: item.title)
+        menu.autoenablesItems = false
+        let toggle = makeItem("开启定时强控", #selector(toggleTimedControl))
+        toggle.state = settings.enabled ? .on : .off
+        menu.addItem(toggle)
+        let status: String
+        if !settings.enabled { status = "已关闭" }
+        else if remainingSeconds > 0 {
+            status = String(format: "剩余 %02d:%02d · 再次解锁需手输 Q-M", remainingSeconds / 60, remainingSeconds % 60)
+        } else { status = "等待下一次原密码成功解锁后计时" }
+        menu.addItem(makeDisabledItem(status))
+        menu.addItem(.separator())
+        for minutes in TimedControlSettings.presets {
+            let preset = makeItem("\(minutes) 分钟", #selector(selectTimedControlPreset(_:)))
+            preset.tag = minutes
+            preset.state = settings.durationMinutes == minutes ? .on : .off
+            menu.addItem(preset)
+        }
+        let isCustom = !TimedControlSettings.presets.contains(settings.durationMinutes)
+        let custom = makeItem(isCustom ? "自定义（\(settings.durationMinutes) 分钟）…" : "自定义…",
+                              #selector(customizeTimedControl))
+        custom.state = isCustom ? .on : .off
+        menu.addItem(custom)
+        item.submenu = menu
+        return item
+    }
+
+    private func promptTimedControlDuration(current: Int) -> Int? {
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = String(current)
+        field.setAccessibilityLabel("定时强控时长（分钟）")
+        var problem: String?
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "自定义定时强控时长"
+            alert.informativeText = problem ?? "输入 1～1440 之间的整数，单位为分钟。"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "保存")
+            alert.addButton(withTitle: "取消")
+            alert.window.initialFirstResponder = field
+            NSApp.activate()
+            field.selectText(nil)
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            let input = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let minutes = Int(input), TimedControlSettings.durationRange.contains(minutes) else {
+                problem = "请输入 1～1440 之间的整数分钟值。"
+                continue
+            }
+            return minutes
+        }
     }
 
     private func makeShortcutTimingItem(_ timing: ShortcutTiming) -> NSMenuItem {
@@ -288,6 +351,19 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func selectSystemAppearance() { delegate?.selectAppearanceMode(.system) }
     @objc private func selectLightAppearance() { delegate?.selectAppearanceMode(.light) }
     @objc private func selectDarkAppearance() { delegate?.selectAppearanceMode(.dark) }
+    @objc private func toggleTimedControl() {
+        guard let delegate else { return }
+        let settings = delegate.timedControlSettings
+        delegate.selectTimedControl(TimedControlSettings(enabled: !settings.enabled, durationMinutes: settings.durationMinutes))
+    }
+    @objc private func selectTimedControlPreset(_ sender: NSMenuItem) {
+        guard let delegate, TimedControlSettings.presets.contains(sender.tag) else { return }
+        delegate.selectTimedControl(TimedControlSettings(enabled: delegate.timedControlSettings.enabled, durationMinutes: sender.tag))
+    }
+    @objc private func customizeTimedControl() {
+        guard let delegate, let minutes = promptTimedControlDuration(current: delegate.timedControlSettings.durationMinutes) else { return }
+        delegate.selectTimedControl(TimedControlSettings(enabled: delegate.timedControlSettings.enabled, durationMinutes: minutes))
+    }
     @objc private func selectTimingPreset(_ sender: NSMenuItem) {
         guard let delegate, delegate.maskMode == .shortcuts,
               let stage = TimingStage(rawValue: sender.tag), let milliseconds = sender.representedObject as? Int else { return }

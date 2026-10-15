@@ -117,6 +117,25 @@
       "enum": ["system", "light", "dark"],
       "default": "system"
     },
+    "timedControl": {
+      "description": "独立的定时强控偏好。首次原密码成功解锁后开始固定周期，周期内再次解锁需手输固定小写 Q-M；重复解锁不延期。只保存开关及时长，退出重开清除本轮周期。缺失或无效对象取默认，字段非法独立回退。",
+      "type": "object",
+      "default": { "enabled": false, "durationMinutes": 30 },
+      "properties": {
+        "enabled": {
+          "description": "是否启用定时强控，默认关闭；开启本身不自动计时或改变锁定状态。",
+          "type": "boolean",
+          "default": false
+        },
+        "durationMinutes": {
+          "description": "每轮时长，单位为整数分钟；缺失、类型错误或越界回退 30。",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "default": 30
+        }
+      }
+    },
     "password": {
       "description": "用户修改后的解锁密码，只保存 PBKDF2-HMAC-SHA256 的派生结果，不保存明文。缺失表示使用默认密码 1234567890（「恢复默认密码」会删除这个字段）。密码按 UTF-8 编码参与计算。",
       "type": "object",

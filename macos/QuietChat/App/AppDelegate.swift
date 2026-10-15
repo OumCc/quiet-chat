@@ -5,6 +5,7 @@
 // 分阶段响应速度随配置保存；变更先取消旧操作，点击时传入不可变快照。
 // 外观由应用统一设置，窗口和控件继承；切换时保留输入与校准草稿。
 // 更新检查须先取得同意；升级后按实际权限显示一次重新授权引导。
+// 定时强控与锁定/遮挡方式独立，运行期截止时间不落盘；设置成功保存后才应用。
 
 import AppKit
 import QuietChatCore
@@ -15,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let configStore = ConfigStore(fileURL: ConfigStore.defaultFileURL)
     private var config = AppConfig.default
     private var lockState = LockState()
+    private var timedControl = TimedControlState()
+    private var timedControlTimer: Timer?
     private let permission = AccessibilityPermission()
     private let updatePreferences = UpdatePreferences()
     private var updates: AppUpdateController?
@@ -41,9 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.shortcuts.cancel(showFeedback: true)
         }
         maskController.onCalibrationFinished = { [weak self] layout in self?.saveListColumn(layout) }
-        maskController.onUnlockAttempt = { [weak self] password in self?.attemptUnlock(with: password) ?? false }
+        maskController.onUnlockAttempt = { [weak self] password, requirement in
+            self?.attemptUnlock(with: password, requirement: requirement) ?? .incorrect
+        }
         maskController.hidesPasswordInput = config.hidePasswordInput
         maskController.onPasswordVisibilityChange = { [weak self] hidden in self?.saveHidePasswordInput(hidden) }
+        syncTimedControl()
         statusMenu = StatusMenuController(delegate: self)
 
         let updates = AppUpdateController(preferences: updatePreferences)
@@ -89,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shortcuts.cancel()
         tracker?.stop()
         refreshDriver?.stop()
+        timedControlTimer?.invalidate()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -195,17 +202,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 锁定
 
-    private func attemptUnlock(with password: String) -> Bool {
-        guard PasswordVerifier.verify(password, against: config.password) else {
-            Log.app.notice("解锁失败：密码错误")
-            return false
+    private func attemptUnlock(with password: String, requirement: UnlockRequirement) -> UnlockAttemptResult {
+        guard lockState.isLocked else { return .requirementChanged }
+        let result = timedControl.attemptUnlock(password, requirement: requirement, settings: config.timedControl,
+                                               passwordRecord: config.password, at: .now)
+        syncTimedControl()
+        guard result == .unlocked else {
+            if result == .incorrect { Log.app.notice("解锁失败：输入不匹配") }
+            return result
         }
         lockState.unlock()
         Log.app.notice("已解锁")
         applyLockState()
         refresh()
-        return true
+        return .unlocked
     }
+
+    /** 只同步强控展示与计时任务，不改变锁定、快捷任务或普通输入偏好。 */
+    private func syncTimedControl() {
+        let now = ContinuousClock.now
+        timedControl.expireIfNeeded(at: now)
+        let seconds = timedControl.remainingSeconds(at: now)
+        maskController.updateTimedControl(requirement: timedControl.requirement(at: now), remainingSeconds: seconds)
+        if seconds > 0, timedControlTimer == nil {
+            let timer = Timer(timeInterval: 1, target: self, selector: #selector(timedControlTick), userInfo: nil, repeats: true)
+            timer.tolerance = 0.05
+            RunLoop.main.add(timer, forMode: .common)
+            timedControlTimer = timer
+        } else if seconds == 0 {
+            timedControlTimer?.invalidate()
+            timedControlTimer = nil
+        }
+    }
+
+    @objc private func timedControlTick() { syncTimedControl() }
 
     /** 落实锁定状态；解锁取消按键任务，重新锁定继续沿用当前方式。 */
     private func applyLockState() {
@@ -320,6 +350,7 @@ extension AppDelegate: StatusMenuDelegate {
     /** 自己的菜单取得输入时也视为离开微信目标，立即使旧搜索失效。 */
     func prepareToOpenStatusMenu() {
         if shortcuts.isBusy { shortcuts.cancel(showFeedback: true) }
+        syncTimedControl()
     }
 
     var statusDescription: String {
@@ -345,6 +376,36 @@ extension AppDelegate: StatusMenuDelegate {
 
     /** 当前分阶段响应速度；菜单显示保存选择，搜索开始时再捕获快照。 */
     var shortcutTiming: ShortcutTiming { config.shortcutTiming }
+
+    var timedControlSettings: TimedControlSettings { config.timedControl }
+    var timedControlRemainingSeconds: Int { timedControl.remainingSeconds(at: .now) }
+
+    /** 活动周期先独立手输确认，再原子保存；取消和失败不改变偏好、截止时间或锁定状态。 */
+    func selectTimedControl(_ settings: TimedControlSettings) {
+        let previous = config.timedControl
+        guard settings != previous else { return }
+        shortcuts.cancel()
+        if timedControl.requirement(at: .now) == .keyboardSequence {
+            let action = settings.enabled ? "将定时强控改为 \(settings.durationMinutes) 分钟" : "关闭定时强控"
+            guard KeyboardSequenceDialog.run(action: action, isRequired: { [self] in
+                timedControl.requirement(at: .now) == .keyboardSequence
+            }) else { return }
+        }
+        var updated = config
+        updated.timedControl = settings
+        do {
+            try configStore.save(updated)
+            config = updated
+            timedControl.applySettings(settings, replacing: previous, at: .now)
+            syncTimedControl()
+        } catch {
+            Log.app.error("定时强控设置保存失败：\(error.localizedDescription, privacy: .public)")
+            let alert = NSAlert(error: error)
+            alert.messageText = "定时强控设置没有保存成功，仍使用原来的设置"
+            NSApp.activate()
+            alert.runModal()
+        }
+    }
 
     var canEditWhitelist: Bool { config.maskMode == .shortcuts && !lockState.isLocked }
 

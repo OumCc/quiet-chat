@@ -61,13 +61,15 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var hidePasswordInput: Bool
     /** 整个应用的外观偏好；默认跟随系统，重启后沿用最后保存的选择。 */
     public var appearanceMode: AppearanceMode
+    /** 定时强控的持久化偏好；运行期截止时间不保存。 */
+    public var timedControl: TimedControlSettings
 
     /** 创建持久化配置；省略快捷时序时使用全零基准，并携带当前速度版本。 */
     public init(
         schemaVersion: Int = Self.currentSchemaVersion, listColumn: ListColumnLayout = .default,
         maskMode: MaskMode = .full, whitelist: [String] = [], preciseListColumn: ListColumnLayout? = nil,
         password: PasswordRecord? = nil, hidePasswordInput: Bool = false, appearanceMode: AppearanceMode = .system,
-        shortcutTiming: ShortcutTiming = .baseline
+        shortcutTiming: ShortcutTiming = .baseline, timedControl: TimedControlSettings = .default
     ) {
         self.schemaVersion = schemaVersion
         self.listColumn = listColumn
@@ -79,6 +81,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.password = password
         self.hidePasswordInput = hidePasswordInput
         self.appearanceMode = appearanceMode
+        self.timedControl = timedControl
     }
 
     public static let `default` = AppConfig()
@@ -99,6 +102,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         password = try container.decodeIfPresent(PasswordRecord.self, forKey: .password)
         hidePasswordInput = try container.decodeIfPresent(Bool.self, forKey: .hidePasswordInput) ?? false
         appearanceMode = try container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode) ?? .system
+        timedControl = (try? container.decode(TimedControlSettings.self, forKey: .timedControl)) ?? .default
     }
 
     /** 指定方式的布局；快捷入口未校准时沿用整块遮挡左右边界，上边距取 0 以遮住整个列表。 */
