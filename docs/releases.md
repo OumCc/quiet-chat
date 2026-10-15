@@ -54,4 +54,4 @@ python3 tools/release/test-update-release.py /private/tmp/quiet-chat-update-test
 
 另开终端运行 `--probe`，验证错误签名、损坏、取消、无更新及重定向；`--check-offline` 验证已拒绝且检查到期时真实控制器启动无请求。这两个模式仅操作独立 bundle ID `io.github.OumCc.QuietChat.UpdateIntegration`。界面安装可打开生成的 `old/QuietChat Update Test.app`，允许检查后手动确认；新构建为 30002，旧构建为 30001。`--reset-host` 创建新的旧构建副本，`--reset-consent` 同时重置该测试域的首次选择。测试 HTTP 只监听本机，正式更新包没有此网络例外。
 
-2026-10-13 在 macOS 26.5/Xcode 26.5 完成 73 项 Core 测试、通用构建、签名门禁、隔离宿主实际替换重启和下载回调场景。Intel/macOS 14 真机、系统重新授权及管理员批准界面尚未验证；完整记录见 [research.md](../openspec/changes/add-macos-auto-update/research.md)。
+2026-10-13 在 macOS 26.5/Xcode 26.5 完成 73 项 Core 测试、通用构建、签名门禁、隔离宿主实际替换重启和下载回调场景。Intel/macOS 14 真机、系统重新授权及管理员批准界面尚未验证；完整记录见 [research.md](../openspec/changes/archive/2026-10-15-add-macos-auto-update/research.md)。
